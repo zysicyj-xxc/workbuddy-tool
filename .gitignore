@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 敏感数据（用户数据、密钥）
+*.enc
+*.db
+data.enc
+proxy_db.json
+logs/
+.antigravity-tools/
+
+# 测试产物
+test-screenshots/
+screenshot_*.png
+
+# 构建
+dist/
+build/
+
+# 编辑器
+.vscode/
+.idea/
