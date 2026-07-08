@@ -1,0 +1,104 @@
+name: Build and Deploy Antigravity-Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: antigravity-deploy
+  cancel-in-progress: true
+
+env:
+  CCR: ccr.ccs.tencentyun.com/zysicyj/storehouse1
+  KUBECONFIG: c:\code\.kube\config
+  DOCKER_BUILDKIT: "1"
+  DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
+  KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
+  NAMESPACE: antigravity
+  DEPLOY_NAME: antigravity-web
+  IMAGE_NAME: antigravity-web
+  HOST: antigravity.zysicyj.top
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, Windows]
+    defaults:
+      run:
+        shell: powershell -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        run: |
+          $tag = "$(Get-Date -Format 'yyyyMMddHHmmss')-$($env:GITHUB_SHA.Substring(0,7))"
+          Add-Content -Path $env:GITHUB_ENV -Value "IMAGE_TAG=$tag"
+          Write-Host "Image tag: $tag"
+
+      - name: Login to Tencent CCR
+        run: |
+          & $env:DOCKER_EXE login $env:CCR -u ${{ secrets.CCR_USERNAME }} -p ${{ secrets.CCR_PASSWORD }}
+
+      - name: Build and push image
+        run: |
+          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          $latest = "$($env:CCR):$($env:IMAGE_NAME)-latest"
+          & $env:DOCKER_EXE build -t $tagged -t $latest -f Dockerfile .
+          & $env:DOCKER_EXE push $tagged
+          & $env:DOCKER_EXE push $latest
+          Write-Host "Pushed: $tagged"
+          Write-Host "Pushed: $latest"
+
+      - name: Ensure namespace and secrets
+        run: |
+          & $env:KUBECTL_EXE create namespace $env:NAMESPACE --dry-run=client -o yaml | & $env:KUBECTL_EXE apply -f -
+          # 从 default 命名空间复制镜像仓库凭据和 TLS 证书到目标命名空间
+          foreach ($s in @('ccr-registry','zysicyj-tls')) {
+            $exists = & $env:KUBECTL_EXE get secret $s -n $env:NAMESPACE --ignore-not-found -o name 2>$null
+            if ($exists) {
+              Write-Host "Secret $s already exists in $($env:NAMESPACE), skip"
+              continue
+            }
+            Write-Host "Copying secret $s from default to $($env:NAMESPACE)"
+            $json = & $env:KUBECTL_EXE get secret $s -n default -o json
+            $obj = $json | ConvertFrom-Json
+            $obj.metadata.PSObject.Properties.Remove('uid')
+            $obj.metadata.PSObject.Properties.Remove('resourceVersion')
+            $obj.metadata.PSObject.Properties.Remove('creationTimestamp')
+            $obj.metadata.namespace = $env:NAMESPACE
+            $obj | ConvertTo-Json -Depth 10 | & $env:KUBECTL_EXE apply -n $env:NAMESPACE -f -
+          }
+
+      - name: Apply K8s manifests
+        run: |
+          & $env:KUBECTL_EXE apply -f deploy/k8s.yaml
+
+      - name: Rollout deployment
+        run: |
+          & $env:KUBECTL_EXE set image deploy/$env:DEPLOY_NAME $env:DEPLOY_NAME="$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)" -n $env:NAMESPACE
+          & $env:KUBECTL_EXE rollout status deploy/$env:DEPLOY_NAME -n $env:NAMESPACE --timeout=300s
+
+      - name: Verify browser access
+        run: |
+          [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+          $ok = $false
+          for ($i = 1; $i -le 12; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri "https://$($env:HOST)" -UseBasicParsing -TimeoutSec 15
+              Write-Host "Attempt ${i}: HTTP $($resp.StatusCode)"
+              if ($resp.StatusCode -eq 200) { $ok = $true; break }
+            } catch {
+              Write-Host "Attempt ${i}: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $ok) { throw "Browser access verification failed" }
+          Write-Host "Browser access OK: https://$($env:HOST) returns 200"
+
+      - name: Show rollout status
+        if: always()
+        run: |
+          & $env:KUBECTL_EXE get pods -n $env:NAMESPACE -o wide
+          & $env:KUBECTL_EXE get ingress -n $env:NAMESPACE
+          & $env:KUBECTL_EXE get events -n $env:NAMESPACE --sort-by='.lastTimestamp' --field-selector type!=Normal | Select-Object -Last 20 | ForEach-Object { Write-Host $_ }

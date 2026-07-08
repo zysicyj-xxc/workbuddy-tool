@@ -1,0 +1,39 @@
+# 编辑器/IDE
+.vscode/
+.idea/
+*.swp
+
+# 版本控制
+.git/
+.gitignore
+
+# 依赖目录（镜像内会重新安装）
+frontend/node_modules/
+backend/__pycache__/
+backend/**/__pycache__/
+.venv/
+venv/
+
+# 构建产物
+frontend/dist/
+build/
+
+# 运行时数据
+*.db
+*.enc
+data.enc
+proxy_db.json
+logs/
+.antigravity-tools/
+
+# 测试文件
+test_*.py
+create_test_db.py
+test-screenshots/
+screenshot_*.png
+
+# CI/Helm/部署相关
+.github/
+deploy/
+Dockerfile
+.dockerignore
