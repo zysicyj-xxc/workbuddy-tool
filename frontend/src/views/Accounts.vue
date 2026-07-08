@@ -1,18 +1,26 @@
 <script setup>
-// 账号管理页面 - 账号列表、添加、导入、删除、签到、积分详情
-import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+// 账号管理页面 - Arco Table + 对话框 + 表单 + 进度条
+import { ref, reactive, onMounted } from 'vue'
+import { Message, Modal } from '@arco-design/web-vue'
+import {
+  IconPlus,
+  IconUpload,
+  IconRefresh,
+  IconDelete,
+  IconEye,
+  IconCheck,
+} from '@arco-design/web-vue/es/icon'
 import { accountsApi, checkinApi, quotaApi } from '../api'
 
 const loading = ref(false)
 const accounts = ref([])
 
-// 状态标签映射
+// 状态标签映射（color 用 Arco 预设颜色名，保证浅色模式下文字清晰）
 const statusMap = {
-  active: { text: '活跃', type: 'success' },
-  quota_exhausted: { text: '积分耗尽', type: 'warning' },
-  error: { text: '异常', type: 'danger' },
-  disabled: { text: '已禁用', type: 'info' },
+  active: { text: '活跃', color: 'green' },
+  quota_exhausted: { text: '积分耗尽', color: 'orange' },
+  error: { text: '异常', color: 'red' },
+  disabled: { text: '已禁用', color: 'gray' },
 }
 
 // 平台选项
@@ -43,12 +51,26 @@ const quotaLoading = ref(false)
 const quotaData = ref(null)
 const currentAccount = ref(null)
 
-// 计算积分百分比
+// 积分取整（统一去掉小数点）
+function formatInt(v) {
+  const n = Number(v || 0)
+  if (isNaN(n)) return 0
+  return Math.round(n)
+}
+
+// 计算剩余积分百分比（用于进度条）
 function quotaPercentage(row) {
-  const total = row.quota?.credits_total || 0
-  const remaining = row.quota?.credits_remaining || 0
+  const total = formatInt(row.quota?.credits_total)
+  const remaining = formatInt(row.quota?.credits_remaining)
   if (total <= 0) return 0
   return Math.round((remaining / total) * 100)
+}
+
+// 进度条颜色
+function quotaColor(percentage) {
+  if (percentage > 50) return '#00b42a'
+  if (percentage > 20) return '#ff7d00'
+  return '#f53f3f'
 }
 
 // 今日是否已签到
@@ -79,7 +101,7 @@ function openAddDialog() {
 // 提交添加账号
 async function submitAdd() {
   if (!addForm.api_key.trim()) {
-    ElMessage.warning('请输入 API Key')
+    Message.warning('请输入 API Key')
     return
   }
   addLoading.value = true
@@ -89,7 +111,7 @@ async function submitAdd() {
       nickname: addForm.nickname.trim(),
       platform: addForm.platform,
     })
-    ElMessage.success('添加账号成功')
+    Message.success('添加账号成功')
     addDialogVisible.value = false
     loadAccounts()
   } finally {
@@ -107,7 +129,7 @@ function openImportDialog() {
 // 提交批量导入
 async function submitImport() {
   if (!importForm.keys.trim()) {
-    ElMessage.warning('请输入要导入的 API Key')
+    Message.warning('请输入要导入的 API Key')
     return
   }
   importLoading.value = true
@@ -116,7 +138,7 @@ async function submitImport() {
       keys: importForm.keys,
       platform: importForm.platform,
     })
-    ElMessage.success(`导入完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
+    Message.success(`导入完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
     importDialogVisible.value = false
     loadAccounts()
   } finally {
@@ -124,12 +146,29 @@ async function submitImport() {
   }
 }
 
-// 刷新所有积分
+// 刷新所有积分（刷新后立即合并到列表，无需重新请求）
 async function refreshAllQuota() {
   loading.value = true
   try {
     const res = await quotaApi.refresh()
-    ElMessage.success(`刷新完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
+    Message.success(`刷新完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
+    // 合并刷新结果到本地列表
+    if (res?.details?.length) {
+      const detailMap = new Map(res.details.map((d) => [d.uid, d]))
+      accounts.value = accounts.value.map((a) => {
+        const d = detailMap.get(a.uid)
+        if (!d || !a.quota) return a
+        return {
+          ...a,
+          quota: {
+            ...a.quota,
+            credits_remaining: d.remaining ?? a.quota.credits_remaining,
+            credits_total: d.total ?? a.quota.credits_total,
+          },
+        }
+      })
+    }
+    // 后台再异步拉一次列表同步其他字段
     loadAccounts()
   } finally {
     loading.value = false
@@ -137,26 +176,26 @@ async function refreshAllQuota() {
 }
 
 // 删除账号
-async function removeAccount(row) {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除账号「${row.nickname}」吗？此操作不可恢复。`,
-      '删除确认',
-      { type: 'warning' }
-    )
-    await accountsApi.remove(row.uid)
-    ElMessage.success('删除成功')
-    loadAccounts()
-  } catch (e) {
-    // 用户取消或删除失败
-  }
+function removeAccount(row) {
+  Modal.warning({
+    title: '删除确认',
+    content: `确定要删除账号「${row.nickname}」吗？此操作不可恢复。`,
+    hideCancel: false,
+    okText: '删除',
+    okType: 'danger',
+    onOk: async () => {
+      await accountsApi.remove(row.uid)
+      Message.success('删除成功')
+      loadAccounts()
+    },
+  })
 }
 
 // 单账号签到
 async function checkinAccount(row) {
   try {
     await checkinApi.checkin(row.uid)
-    ElMessage.success(`账号「${row.nickname}」签到成功`)
+    Message.success(`账号「${row.nickname}」签到成功`)
     loadAccounts()
   } catch (e) {
     // 错误已由拦截器提示
@@ -180,198 +219,287 @@ onMounted(loadAccounts)
 </script>
 
 <template>
-  <div v-loading="loading">
-    <!-- 顶部操作栏 -->
-    <el-card shadow="never" style="margin-bottom: 16px">
-      <div class="toolbar">
-        <div>
-          <el-button type="primary" @click="openAddDialog">
-            <el-icon><Plus /></el-icon>添加账号
-          </el-button>
-          <el-button type="success" @click="openImportDialog">
-            <el-icon><Upload /></el-icon>批量导入
-          </el-button>
-          <el-button type="warning" @click="refreshAllQuota">
-            <el-icon><Refresh /></el-icon>刷新积分
-          </el-button>
+  <a-spin :loading="loading" class="page-spin">
+    <div class="accounts-page">
+      <!-- 顶部操作栏 -->
+      <a-card :bordered="true" style="margin-bottom: 12px">
+        <div class="toolbar">
+          <a-space>
+            <a-button type="primary" @click="openAddDialog">
+              <template #icon><IconPlus /></template>
+              添加账号
+            </a-button>
+            <a-button type="outline" status="success" @click="openImportDialog">
+              <template #icon><IconUpload /></template>
+              批量导入
+            </a-button>
+            <a-button type="outline" status="warning" @click="refreshAllQuota">
+              <template #icon><IconRefresh /></template>
+              刷新积分
+            </a-button>
+          </a-space>
+          <a-button @click="loadAccounts">
+            <template #icon><IconRefresh /></template>
+            刷新列表
+          </a-button>
         </div>
-        <el-button @click="loadAccounts">
-          <el-icon><Refresh /></el-icon>刷新列表
-        </el-button>
-      </div>
-    </el-card>
+      </a-card>
 
-    <!-- 账号表格 -->
-    <el-card shadow="never">
-      <el-table :data="accounts" stripe style="width: 100%">
-        <el-table-column prop="nickname" label="昵称" min-width="120" />
-        <el-table-column prop="platform" label="平台" width="120" />
+      <!-- 账号表格 -->
+      <a-card :bordered="true">
+        <a-table
+          :data="accounts"
+          :pagination="{
+            pageSize: 10,
+            showTotal: true,
+            showPageSize: true,
+          }"
+          :scroll="{ x: 1200 }"
+          stripe
+        >
+          <template #columns>
+            <a-table-column title="昵称" data-index="nickname" :width="120" ellipsis tooltip />
+            <a-table-column title="平台" data-index="platform" :width="90" />
 
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="statusMap[row.status]?.type || 'info'">
-              {{ statusMap[row.status]?.text || row.status }}
-            </el-tag>
+            <a-table-column title="状态" :width="100">
+              <template #cell="{ record }">
+                <a-tag :color="statusMap[record.status]?.color || 'gray'" bordered>
+                  {{ statusMap[record.status]?.text || record.status }}
+                </a-tag>
+              </template>
+            </a-table-column>
+
+            <a-table-column title="剩余积分" :min-width="220">
+              <template #cell="{ record }">
+                <div class="quota-cell">
+                  <div class="quota-text">
+                    <span class="quota-remaining">{{ formatInt(record.quota?.credits_remaining) }}</span>
+                    <span class="quota-total"> / {{ formatInt(record.quota?.credits_total) }}</span>
+                    <span class="quota-used">（已用 {{ formatInt(formatInt(record.quota?.credits_total) - formatInt(record.quota?.credits_remaining)) }}）</span>
+                  </div>
+                  <a-progress
+                    :percent="quotaPercentage(record)"
+                    :color="quotaColor(quotaPercentage(record))"
+                    size="mini"
+                    :show-text="false"
+                  />
+                </div>
+              </template>
+            </a-table-column>
+
+            <a-table-column title="签到状态" :width="130">
+              <template #cell="{ record }">
+                <a-tag
+                  :color="isCheckedToday(record) ? 'green' : 'arcoblue'"
+                  size="small"
+                  bordered
+                >
+                  {{ isCheckedToday(record) ? '今日已签' : '今日未签' }}
+                </a-tag>
+                <div class="text-secondary" style="margin-top: 4px">
+                  连续 {{ record.checkin?.streak_days || 0 }} 天
+                </div>
+              </template>
+            </a-table-column>
+
+            <a-table-column title="操作" :width="240" fixed="right">
+              <template #cell="{ record }">
+                <a-space size="small">
+                  <a-button size="small" type="text" @click="showQuota(record)">
+                    <template #icon><IconEye /></template>
+                    详情
+                  </a-button>
+                  <a-button
+                    size="small"
+                    type="text"
+                    status="primary"
+                    @click="checkinAccount(record)"
+                  >
+                    <template #icon><IconCheck /></template>
+                    签到
+                  </a-button>
+                  <a-button
+                    size="small"
+                    type="text"
+                    status="danger"
+                    @click="removeAccount(record)"
+                  >
+                    <template #icon><IconDelete /></template>
+                    删除
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table-column>
           </template>
-        </el-table-column>
+        </a-table>
+      </a-card>
 
-        <el-table-column label="剩余/总积分" min-width="180">
-          <template #default="{ row }">
-            <div>
-              <span style="font-size: 12px; color: #909399">
-                {{ row.quota?.credits_remaining || 0 }} / {{ row.quota?.credits_total || 0 }}
-              </span>
-            </div>
-            <el-progress
-              :percentage="quotaPercentage(row)"
-              :stroke-width="10"
-              :show-text="false"
-              :color="quotaPercentage(row) > 50 ? '#67c23a' : quotaPercentage(row) > 20 ? '#e6a23c' : '#f56c6c'"
+      <!-- 添加账号对话框 -->
+      <a-modal
+        v-model:visible="addDialogVisible"
+        title="添加账号"
+        :width="500"
+        :on-before-ok="async () => {
+          await submitAdd()
+          return !addLoading.value && !addDialogVisible.value
+        }"
+        :ok-loading="addLoading"
+        @cancel="addDialogVisible = false"
+      >
+        <a-form :model="addForm" layout="vertical">
+          <a-form-item label="API Key" required>
+            <a-input
+              v-model="addForm.api_key"
+              placeholder="请输入以 ck_ 开头的 API Key"
+              allow-clear
             />
-          </template>
-        </el-table-column>
-
-        <el-table-column label="签到状态" width="120">
-          <template #default="{ row }">
-            <el-tag :type="isCheckedToday(row) ? 'success' : 'info'" size="small">
-              {{ isCheckedToday(row) ? '今日已签' : '今日未签' }}
-            </el-tag>
-            <div style="font-size: 12px; color: #909399; margin-top: 4px">
-              连续 {{ row.checkin?.streak_days || 0 }} 天
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="260" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="showQuota(row)">详情</el-button>
-            <el-button size="small" type="primary" @click="checkinAccount(row)">签到</el-button>
-            <el-button size="small" type="danger" @click="removeAccount(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- 添加账号对话框 -->
-    <el-dialog v-model="addDialogVisible" title="添加账号" width="500px">
-      <el-form :model="addForm" label-width="100px">
-        <el-form-item label="API Key" required>
-          <el-input
-            v-model="addForm.api_key"
-            placeholder="请输入以 ck_ 开头的 API Key"
-            clearable
-          />
-        </el-form-item>
-        <el-form-item label="昵称">
-          <el-input
-            v-model="addForm.nickname"
-            placeholder="可选，留空则自动生成"
-            clearable
-          />
-        </el-form-item>
-        <el-form-item label="平台">
-          <el-select v-model="addForm.platform" style="width: 100%">
-            <el-option
-              v-for="opt in platformOptions"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
+          </a-form-item>
+          <a-form-item label="昵称">
+            <a-input
+              v-model="addForm.nickname"
+              placeholder="可选，留空则自动生成"
+              allow-clear
             />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="addDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="addLoading" @click="submitAdd">确定</el-button>
-      </template>
-    </el-dialog>
+          </a-form-item>
+          <a-form-item label="平台">
+            <a-select v-model="addForm.platform">
+              <a-option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </a-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
+      </a-modal>
 
-    <!-- 批量导入对话框 -->
-    <el-dialog v-model="importDialogVisible" title="批量导入账号" width="600px">
-      <el-form :model="importForm" label-width="80px">
-        <el-form-item label="平台">
-          <el-select v-model="importForm.platform" style="width: 100%">
-            <el-option
-              v-for="opt in platformOptions"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
+      <!-- 批量导入对话框 -->
+      <a-modal
+        v-model:visible="importDialogVisible"
+        title="批量导入账号"
+        :width="600"
+        @ok="submitImport"
+        :ok-loading="importLoading"
+        @cancel="importDialogVisible = false"
+      >
+        <a-form :model="importForm" layout="vertical">
+          <a-form-item label="平台">
+            <a-select v-model="importForm.platform">
+              <a-option v-for="opt in platformOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </a-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="API Keys" required>
+            <a-textarea
+              v-model="importForm.keys"
+              :auto-size="{ minRows: 8, maxRows: 16 }"
+              placeholder="每行一个 ck_xxx"
+              allow-clear
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="API Keys">
-          <el-input
-            v-model="importForm.keys"
-            type="textarea"
-            :rows="10"
-            placeholder="每行一个 ck_xxx"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="importLoading" @click="submitImport">导入</el-button>
-      </template>
-    </el-dialog>
+          </a-form-item>
+        </a-form>
+      </a-modal>
 
-    <!-- 积分详情对话框 -->
-    <el-dialog
-      v-model="quotaDialogVisible"
-      :title="`积分详情 - ${currentAccount?.nickname || ''}`"
-      width="800px"
-    >
-      <div v-loading="quotaLoading">
-        <template v-if="quotaData">
-          <el-descriptions :column="2" border style="margin-bottom: 16px">
-            <el-descriptions-item label="总积分">
-              {{ quotaData.total_credits }}
-            </el-descriptions-item>
-            <el-descriptions-item label="剩余积分">
-              {{ quotaData.remaining_credits }}
-            </el-descriptions-item>
-          </el-descriptions>
+      <!-- 积分详情对话框 -->
+      <a-modal
+        v-model:visible="quotaDialogVisible"
+        :title="`积分详情 - ${currentAccount?.nickname || ''}`"
+        :width="800"
+        :footer="false"
+      >
+        <a-spin :loading="quotaLoading">
+          <template v-if="quotaData">
+            <a-descriptions :column="2" bordered :data="[
+              { label: '总积分', value: formatInt(quotaData.total_credits) },
+              { label: '剩余积分', value: formatInt(quotaData.remaining_credits) },
+              { label: '已用积分', value: formatInt(formatInt(quotaData.total_credits) - formatInt(quotaData.remaining_credits)) },
+            ]" style="margin-bottom: 16px" />
 
-          <div style="margin-bottom: 8px; font-weight: 600">资源包列表</div>
-          <el-table :data="quotaData.packages" stripe border>
-            <el-table-column prop="package_name" label="资源包名称" min-width="140" />
-            <el-table-column prop="type_label" label="类型" width="100" />
-            <el-table-column label="容量（剩余/总）" width="140">
-              <template #default="{ row }">
-                {{ row.capacity_remain }} / {{ row.capacity_size }}
+            <div class="section-title">资源包列表</div>
+            <a-table :data="quotaData.packages" stripe :pagination="false" :bordered="{ wrapper: true, cell: true }">
+              <template #columns>
+                <a-table-column title="资源包名称" data-index="package_name" :min-width="140" />
+                <a-table-column title="类型" data-index="type_label" :width="100" />
+                <a-table-column title="容量（剩余/总）" :width="140">
+                  <template #cell="{ record }">
+                    {{ formatInt(record.capacity_remain) }} / {{ formatInt(record.capacity_size) }}
+                  </template>
+                </a-table-column>
+                <a-table-column title="使用进度" :min-width="180">
+                  <template #cell="{ record }">
+                    <a-progress
+                      :percent="record.usage_percentage"
+                      :color="quotaColor(record.remain_percentage)"
+                      size="small"
+                    />
+                  </template>
+                </a-table-column>
+                <a-table-column title="周期剩余" :width="100">
+                  <template #cell="{ record }">
+                    {{ formatInt(record.cycle_remain) }} / {{ formatInt(record.cycle_size) }}
+                  </template>
+                </a-table-column>
+                <a-table-column title="状态" :width="90">
+                  <template #cell="{ record }">
+                    <a-tag :color="record.is_exhausted ? 'red' : 'green'" size="small">
+                      {{ record.is_exhausted ? '已耗尽' : '可用' }}
+                    </a-tag>
+                  </template>
+                </a-table-column>
               </template>
-            </el-table-column>
-            <el-table-column label="使用进度" min-width="180">
-              <template #default="{ row }">
-                <el-progress
-                  :percentage="row.usage_percentage"
-                  :stroke-width="10"
-                  :color="row.remain_percentage > 50 ? '#67c23a' : row.remain_percentage > 20 ? '#e6a23c' : '#f56c6c'"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="周期剩余" width="100">
-              <template #default="{ row }">
-                {{ row.cycle_remain }} / {{ row.cycle_size }}
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.is_exhausted ? 'danger' : 'success'" size="small">
-                  {{ row.is_exhausted ? '已耗尽' : '可用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-      </div>
-    </el-dialog>
-  </div>
+            </a-table>
+          </template>
+        </a-spin>
+      </a-modal>
+    </div>
+  </a-spin>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
+.page-spin {
+  width: 100%;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.quota-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .quota-text {
+    font-size: 12px;
+    color: var(--color-text-3);
+    line-height: 1.4;
+  }
+
+  .quota-remaining {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-1);
+  }
+
+  .quota-total {
+    color: var(--color-text-3);
+  }
+
+  .quota-used {
+    color: var(--color-text-4);
+    font-size: 11px;
+  }
+}
+
+.section-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--color-text-1);
+}
+
+.text-secondary {
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 </style>

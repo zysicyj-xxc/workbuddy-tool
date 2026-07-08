@@ -1,7 +1,7 @@
 {
   "name": "antigravity-web-frontend",
-  "version": "1.0.0",
-  "description": "Antigravity Tools Web 前端 - 将桌面工具改造为 Web 项目",
+  "version": "2.0.0",
+  "description": "Antigravity Tools Web 前端 - Arco Design Vue 重构版",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,14 +10,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.3.1",
+    "@arco-design/web-vue": "^2.56.3",
     "axios": "^1.7.2",
-    "element-plus": "^2.7.6",
+    "echarts": "^5.5.1",
     "vue": "^3.4.31",
     "vue-router": "^4.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.5",
+    "sass": "^1.77.8",
     "vite": "^5.3.3"
   }
 }

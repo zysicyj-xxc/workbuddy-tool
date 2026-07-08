@@ -277,6 +277,22 @@ def get_proxy_logs(limit: int = 200):
     return db.get_request_logs(limit=limit)
 
 
+@router.get("/stats/by-client")
+def get_stats_by_client(days: int = 7, limit: int = 20):
+    """按客户端 User-Agent 维度聚合请求统计
+
+    返回：
+    [
+      {client, requests, prompt_tokens, completion_tokens, total_tokens}, ...
+    ]
+    按 requests 降序。
+
+    days: 1=今日 / 7=近7天 / 30=近30天 / 0或不传=所有日志聚合
+    """
+    db = ProxyDatabase.get_instance()
+    return db.get_stats_by_client(days=days if days else None, limit=limit)
+
+
 @router.get("/log-files")
 def list_log_files():
     """获取日志文件列表

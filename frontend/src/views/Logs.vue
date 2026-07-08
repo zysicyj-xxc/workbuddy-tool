@@ -1,7 +1,8 @@
 <script setup>
 // 调用日志页面 - 日志文件列表 + 内容预览 + 实时刷新
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { Message } from '@arco-design/web-vue'
+import { IconRefresh, IconFile } from '@arco-design/web-vue/es/icon'
 import { proxyApi } from '../api'
 
 const logFilesLoading = ref(false)
@@ -10,11 +11,14 @@ const currentLogFile = ref('')
 const logContent = ref('')
 const logContentLoading = ref(false)
 const logLines = computed(() => (logContent.value ? logContent.value.split('\n').length : 0))
-// 实时刷新开关
 const autoRefresh = ref(false)
 let refreshTimer = null
 
-// 格式化文件大小
+// 表格行自定义类名（用于高亮当前选中行）
+function rowClass(record) {
+  return currentLogFile.value === (record.name || record.filename) ? 'arco-table-tr-active' : ''
+}
+
 function formatSize(bytes) {
   if (bytes == null) return '-'
   if (bytes < 1024) return `${bytes} B`
@@ -22,7 +26,6 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
 
-// 格式化修改时间
 function formatTime(ts) {
   if (!ts) return '-'
   const d = new Date(ts * 1000)
@@ -30,13 +33,11 @@ function formatTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-// 加载日志文件列表
 async function loadLogFiles() {
   logFilesLoading.value = true
   try {
     const data = (await proxyApi.getLogFiles()) || []
     logFiles.value = data
-    // 默认选中最新文件
     if (data.length && !currentLogFile.value) {
       currentLogFile.value = data[0].name || data[0].filename
       await loadLogFileContent(currentLogFile.value)
@@ -46,7 +47,6 @@ async function loadLogFiles() {
   }
 }
 
-// 加载日志文件内容
 async function loadLogFileContent(filename) {
   if (!filename) return
   logContentLoading.value = true
@@ -60,19 +60,17 @@ async function loadLogFileContent(filename) {
   }
 }
 
-// 选中日志文件
 async function selectLogFile(file) {
   currentLogFile.value = file.name || file.filename
   await loadLogFileContent(currentLogFile.value)
 }
 
-// 切换自动刷新
 function handleAutoRefreshChange(val) {
   if (val) {
     refreshTimer = setInterval(() => {
       if (currentLogFile.value) loadLogFileContent(currentLogFile.value)
     }, 3000)
-    ElMessage.success('已开启实时刷新（每 3 秒）')
+    Message.success('已开启实时刷新（每 3 秒）')
   } else {
     if (refreshTimer) {
       clearInterval(refreshTimer)
@@ -92,107 +90,132 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <el-row :gutter="16">
+  <a-row :gutter="12">
     <!-- 左侧：日志文件列表 -->
-    <el-col :span="8">
-      <el-card shadow="never">
-        <template #header>
-          <div class="card-header">
+    <a-col :xs="24" :md="8">
+      <a-card :bordered="true">
+        <template #title>
+          <a-space>
+            <IconFile />
             <span>日志文件</span>
-            <el-button type="primary" link @click="loadLogFiles">
-              <el-icon><Refresh /></el-icon>刷新
-            </el-button>
-          </div>
+          </a-space>
         </template>
-        <el-table
-          v-loading="logFilesLoading"
+        <template #extra>
+          <a-button type="text" size="small" @click="loadLogFiles">
+            <template #icon><IconRefresh /></template>
+            刷新
+          </a-button>
+        </template>
+        <a-table
           :data="logFiles"
+          :loading="logFilesLoading"
+          :pagination="false"
           stripe
-          border
-          highlight-current-row
+          :scroll="{ y: 580 }"
+          row-class="log-file-row"
+          :row-class="rowClass"
           @row-click="selectLogFile"
-          style="cursor: pointer"
-          max-height="650"
         >
-          <el-table-column label="文件名" min-width="200">
-            <template #default="{ row }">
-              <span
-                :style="{
-                  color: currentLogFile === (row.name || row.filename) ? '#409eff' : '',
-                  fontWeight: currentLogFile === (row.name || row.filename) ? '600' : 'normal',
-                }"
-              >
-                {{ row.name || row.filename }}
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column label="大小" width="90">
-            <template #default="{ row }">{{ formatSize(row.size) }}</template>
-          </el-table-column>
-          <el-table-column label="修改时间" min-width="160">
-            <template #default="{ row }">{{ formatTime(row.modified_time) }}</template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-if="!logFilesLoading && !logFiles.length" description="暂无日志文件" />
-      </el-card>
-    </el-col>
+          <template #columns>
+            <a-table-column title="文件名" :min-width="200">
+              <template #cell="{ record }">
+                <span
+                  :class="{
+                    'log-name-active': currentLogFile === (record.name || record.filename),
+                  }"
+                >
+                  {{ record.name || record.filename }}
+                </span>
+              </template>
+            </a-table-column>
+            <a-table-column title="大小" :width="90">
+              <template #cell="{ record }">{{ formatSize(record.size) }}</template>
+            </a-table-column>
+            <a-table-column title="修改时间" :min-width="160">
+              <template #cell="{ record }">{{ formatTime(record.modified_time) }}</template>
+            </a-table-column>
+          </template>
+        </a-table>
+        <a-empty v-if="!logFilesLoading && !logFiles.length" description="暂无日志文件" />
+      </a-card>
+    </a-col>
 
     <!-- 右侧：日志内容预览 -->
-    <el-col :span="16">
-      <el-card shadow="never">
-        <template #header>
-          <div class="card-header">
-            <span>
-              {{ currentLogFile || '请选择日志文件' }}
-              <span style="color: #909399; font-size: 12px; margin-left: 8px">
-                共 {{ logLines }} 行
-              </span>
-            </span>
-            <div style="display: flex; align-items: center; gap: 12px">
-              <span style="font-size: 13px; color: #606266">实时刷新</span>
-              <el-switch v-model="autoRefresh" @change="handleAutoRefreshChange" />
-              <el-button
-                type="primary"
-                link
-                :disabled="!currentLogFile"
-                @click="loadLogFileContent(currentLogFile)"
-              >
-                <el-icon><Refresh /></el-icon>刷新
-              </el-button>
-            </div>
-          </div>
+    <a-col :xs="24" :md="16">
+      <a-card :bordered="true">
+        <template #title>
+          <a-space>
+            <span>{{ currentLogFile || '请选择日志文件' }}</span>
+            <a-tag size="small" color="arcoblue">
+              共 {{ logLines }} 行
+            </a-tag>
+          </a-space>
         </template>
-        <div v-loading="logContentLoading" class="log-content-wrapper">
+        <template #extra>
+          <a-space>
+            <a-space size="small">
+              <span class="text-secondary">实时刷新</span>
+              <a-switch v-model="autoRefresh" @change="handleAutoRefreshChange" size="small" />
+            </a-space>
+            <a-button
+              type="text"
+              size="small"
+              :disabled="!currentLogFile"
+              @click="loadLogFileContent(currentLogFile)"
+            >
+              <template #icon><IconRefresh /></template>
+              刷新
+            </a-button>
+          </a-space>
+        </template>
+        <a-spin :loading="logContentLoading" class="log-content-spin">
           <pre v-if="logContent" class="log-content">{{ logContent }}</pre>
-          <el-empty v-else description="暂无日志内容" />
-        </div>
-      </el-card>
-    </el-col>
-  </el-row>
+          <a-empty v-else description="暂无日志内容" />
+        </a-spin>
+      </a-card>
+    </a-col>
+  </a-row>
 </template>
 
-<style scoped>
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+<style lang="scss" scoped>
+.text-secondary {
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 
-.log-content-wrapper {
-  max-height: 650px;
-  overflow: auto;
-  background-color: #1e1e1e;
-  border-radius: 4px;
-  padding: 12px;
+.log-content-spin {
+  display: block;
+  width: 100%;
 }
 
 .log-content {
   margin: 0;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  max-height: 580px;
+  overflow: auto;
+  background-color: var(--color-fill-3);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
-  line-height: 1.6;
-  color: #d4d4d4;
+  line-height: 1.7;
+  color: var(--color-text-1);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.log-name-active {
+  color: rgb(var(--primary-6));
+  font-weight: 600;
+}
+
+:deep(.log-file-row) {
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .log-content {
+    max-height: 400px;
+    font-size: 12px;
+  }
 }
 </style>

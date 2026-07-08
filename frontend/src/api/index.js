@@ -1,7 +1,7 @@
 // API 请求封装 - 使用 axios 封装所有后端接口调用
 // baseURL 为空字符串，通过 Vite 代理转发到 http://localhost:8000
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { Message } from '@arco-design/web-vue'
 
 // 创建 axios 实例
 const request = axios.create({
@@ -19,7 +19,7 @@ request.interceptors.response.use(
       error.response?.data?.message ||
       error.message ||
       '请求失败'
-    ElMessage.error(msg)
+    Message.error(msg)
     return Promise.reject(error)
   }
 )
@@ -92,6 +92,8 @@ export const proxyApi = {
   stop: () => request.post('/api/proxy/stop'),
   // 使用统计
   getStats: (days) => request.get('/api/proxy/stats', { params: days ? { days } : {} }),
+  // 按客户端维度统计（来源分析）
+  getStatsByClient: (days) => request.get('/api/proxy/stats/by-client', { params: days ? { days } : {} }),
   // 请求日志
   getLogs: (limit) => request.get('/api/proxy/logs', { params: limit ? { limit } : {} }),
   // 支持的模型列表

@@ -1,194 +1,461 @@
 <script setup>
-// 主布局组件 - 左侧菜单 + 顶部标题栏 + 右侧主内容区 + 左下角外观切换
-import { ref, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+// 主布局 - Arco Layout：可折叠侧边栏 + 顶部工具栏 + 全局搜索 + 通知中心 + 主题切换
+import { computed, nextTick, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  IconMenuFold,
+  IconMenuUnfold,
+  IconMoon,
+  IconSun,
+  IconSearch,
+  IconNotification,
+  IconDashboard,
+  IconUser,
+  IconCalendar,
+  IconLink,
+  IconStorage,
+  IconFile,
+  IconSettings,
+  IconBulb,
+} from '@arco-design/web-vue/es/icon'
+import { useThemeStore } from '../stores/theme'
 
 const route = useRoute()
+const router = useRouter()
+const theme = useThemeStore()
+// 解构 isDark 为顶层 ref，避免模板中 ref 对象不自动解包导致切换失效
+const { isDark } = theme
 
-// 菜单项配置（新增日志、设置改名数据管理）
+// 菜单项配置
 const menuItems = [
-  { index: '/', title: '仪表盘', icon: 'Odometer' },
-  { index: '/accounts', title: '账号管理', icon: 'User' },
-  { index: '/checkin', title: '每日签到', icon: 'Calendar' },
-  { index: '/proxy', title: 'API代理', icon: 'Connection' },
-  { index: '/packages', title: '资源包管理', icon: 'Box' },
-  { index: '/logs', title: '日志', icon: 'Document' },
-  { index: '/settings', title: '数据管理', icon: 'FolderOpened' },
+  { index: '/', title: '仪表盘', icon: IconDashboard },
+  { index: '/accounts', title: '账号管理', icon: IconUser },
+  { index: '/checkin', title: '每日签到', icon: IconCalendar },
+  { index: '/proxy', title: 'API代理', icon: IconLink },
+  { index: '/packages', title: '资源包管理', icon: IconStorage },
+  { index: '/logs', title: '日志', icon: IconFile },
+  { index: '/settings', title: '数据管理', icon: IconSettings },
 ]
 
-// 主题切换（明暗模式）- 持久化到 localStorage
-const isDark = ref(false)
+// 侧边栏折叠状态（持久化）
+const collapsed = ref(localStorage.getItem('workbuddy-collapsed') === 'true' || localStorage.getItem('antigravity-collapsed') === 'true')
+const isMobile = ref(false)
+const mobileDrawerVisible = ref(false)
 
-function applyDark(val) {
-  document.documentElement.classList.toggle('dark', val)
-  // 同步 Element Plus 组件样式
-  document.body.style.backgroundColor = val ? '#141414' : ''
-}
-
-function toggleDark(val) {
-  isDark.value = val
-  applyDark(val)
-  localStorage.setItem('antigravity-theme', val ? 'dark' : 'light')
-}
-
-onMounted(() => {
-  // 读取持久化主题
-  const saved = localStorage.getItem('antigravity-theme')
-  if (saved === 'dark') {
-    isDark.value = true
-    applyDark(true)
+function detectViewport() {
+  isMobile.value = window.innerWidth < 768
+  // 移动端默认折叠
+  if (isMobile.value) {
+    collapsed.value = true
   }
+}
+
+function toggleCollapsed() {
+  // 移动端：打开抽屉而非折叠
+  if (isMobile.value) {
+    mobileDrawerVisible.value = true
+    return
+  }
+  collapsed.value = !collapsed.value
+  localStorage.setItem('workbuddy-collapsed', String(collapsed.value))
+  localStorage.removeItem('antigravity-collapsed')
+}
+
+function handleMenuClick(key) {
+  router.push(key)
+  if (isMobile.value) {
+    mobileDrawerVisible.value = false
+  }
+}
+
+const activeMenuKey = computed(() => route.path)
+
+// ─── 全局搜索 ───
+const searchVisible = ref(false)
+const searchKeyword = ref('')
+const searchOptions = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (!kw) return []
+  return menuItems
+    .filter((m) => m.title.toLowerCase().includes(kw))
+    .map((m) => ({
+      label: m.title,
+      value: m.index,
+    }))
+})
+
+function openSearch() {
+  searchVisible.value = true
+  searchKeyword.value = ''
+  nextTick(() => {
+    document.querySelector('.global-search-input input')?.focus()
+  })
+}
+
+function handleSearchSelect(value) {
+  if (value) {
+    router.push(value)
+    searchVisible.value = false
+  }
+}
+
+// 快捷键：Ctrl/Cmd + K 唤出全局搜索
+function handleKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault()
+    openSearch()
+  }
+}
+
+// ─── 通知中心 ───
+const notifyVisible = ref(false)
+const notifications = ref([])
+const notifUnreadCount = ref(0)
+
+// 拉取一次通知（复用 dashboard 数据简单实现）
+async function loadNotifications() {
+  // 简化版：仅展示功能入口，未对接后端通知接口
+  notifications.value = []
+  notifUnreadCount.value = 0
+}
+
+watch(notifyVisible, (v) => {
+  if (v) loadNotifications()
+})
+
+// ─── 生命周期 ───
+import { onBeforeUnmount, onMounted } from 'vue'
+onMounted(() => {
+  detectViewport()
+  window.addEventListener('resize', detectViewport)
+  window.addEventListener('keydown', handleKeydown)
+  loadNotifications()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', detectViewport)
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
 <template>
-  <el-container class="layout-container">
-    <!-- 左侧菜单栏 -->
-    <el-aside width="220px" class="layout-aside">
+  <a-layout class="layout-root">
+    <!-- 桌面侧边栏 -->
+    <a-layout-sider
+      v-if="!isMobile"
+      :width="220"
+      :collapsed-width="64"
+      :collapsible="false"
+      :collapsed="collapsed"
+      :resize-directions="['right']"
+      :resize-w="0"
+      breakpoint="md"
+      class="layout-sider"
+    >
       <div class="logo">
-        <el-icon size="24"><Cpu /></el-icon>
-        <span class="logo-text">Antigravity Tools</span>
+        <div class="logo-icon">
+          <IconBulb />
+        </div>
+        <span v-if="!collapsed" class="logo-text">WorkBuddy</span>
       </div>
-      <el-menu
-        :default-active="route.path"
-        router
+      <a-menu
+        :selected-keys="[activeMenuKey]"
+        :collapsed="collapsed"
+        :auto-open-selected="false"
+        @menu-item-click="handleMenuClick"
         class="layout-menu"
       >
-        <el-menu-item
-          v-for="item in menuItems"
-          :key="item.index"
-          :index="item.index"
-        >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.title }}</span>
-        </el-menu-item>
-      </el-menu>
+        <a-menu-item v-for="item in menuItems" :key="item.index">
+          <template #icon>
+            <component :is="item.icon" />
+          </template>
+          {{ item.title }}
+        </a-menu-item>
+      </a-menu>
+    </a-layout-sider>
 
-      <!-- 左下角外观切换 -->
-      <div class="aside-footer">
-        <div class="theme-switch">
-          <el-icon size="16"><Sunny /></el-icon>
-          <el-switch
-            v-model="isDark"
-            size="small"
-            @change="toggleDark"
-            class="theme-switch-control"
-          />
-          <el-icon size="16"><Moon /></el-icon>
-        </div>
+    <!-- 移动端抽屉式侧边栏 -->
+    <a-drawer
+      v-if="isMobile"
+      v-model:visible="mobileDrawerVisible"
+      :width="220"
+      placement="left"
+      :footer="false"
+      :header="false"
+    >
+      <div class="logo">
+        <div class="logo-icon"><IconBulb /></div>
+        <span class="logo-text">WorkBuddy</span>
       </div>
-    </el-aside>
+      <a-menu
+        :selected-keys="[activeMenuKey]"
+        @menu-item-click="handleMenuClick"
+        class="layout-menu"
+      >
+        <a-menu-item v-for="item in menuItems" :key="item.index">
+          <template #icon>
+            <component :is="item.icon" />
+          </template>
+          {{ item.title }}
+        </a-menu-item>
+      </a-menu>
+    </a-drawer>
 
-    <el-container>
-      <!-- 顶部标题栏 -->
-      <el-header class="layout-header">
-        <span class="header-title">{{ route.meta.title || 'Antigravity Tools Web' }}</span>
-      </el-header>
+    <a-layout class="layout-body">
+      <!-- 顶部工具栏 -->
+      <a-layout-header class="layout-header">
+        <div class="header-left">
+          <a-button type="text" class="collapse-btn" @click="toggleCollapsed">
+            <template #icon>
+              <IconMenuUnfold v-if="collapsed && !isMobile" />
+              <IconMenuFold v-else />
+            </template>
+          </a-button>
+          <a-breadcrumb class="header-breadcrumb">
+            <a-breadcrumb-item>
+              <IconDashboard />
+            </a-breadcrumb-item>
+            <a-breadcrumb-item>{{ route.meta.title || 'WorkBuddy Tool' }}</a-breadcrumb-item>
+          </a-breadcrumb>
+        </div>
 
-      <!-- 右侧主内容区 -->
-      <el-main class="layout-main">
-        <router-view />
-      </el-main>
-    </el-container>
-  </el-container>
+        <div class="header-right">
+          <a-button type="text" class="header-action" @click="openSearch" title="搜索 (Ctrl+K)">
+            <template #icon><IconSearch /></template>
+          </a-button>
+          <a-badge :count="notifUnreadCount" :max-count="9" dot>
+            <a-button type="text" class="header-action" @click="notifyVisible = true" title="通知">
+              <template #icon><IconNotification /></template>
+            </a-button>
+          </a-badge>
+          <a-button type="text" class="header-action" @click="theme.toggle()" title="切换主题">
+            <template #icon>
+              <IconMoon v-if="!isDark" />
+              <IconSun v-else />
+            </template>
+          </a-button>
+        </div>
+      </a-layout-header>
+
+      <!-- 主内容区 -->
+      <a-layout-content class="layout-content">
+        <router-view v-slot="{ Component }">
+          <transition name="fade" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </a-layout-content>
+    </a-layout>
+  </a-layout>
+
+  <!-- 全局搜索弹窗 -->
+  <a-modal
+    v-model:visible="searchVisible"
+    :footer="false"
+    :mask-closable="true"
+    :mask="true"
+    :unmount-on-close="false"
+    :modal-style="{ width: '600px', padding: 0 }"
+    :body-style="{ padding: 0 }"
+    title=""
+    :closable="false"
+  >
+    <div class="global-search">
+      <a-input
+        v-model="searchKeyword"
+        class="global-search-input"
+        placeholder="搜索功能菜单（Ctrl+K）"
+        allow-clear
+        size="large"
+        :bordered="false"
+      >
+        <template #prefix><IconSearch /></template>
+      </a-input>
+      <a-list v-if="searchOptions.length" class="search-options">
+        <a-list-item
+          v-for="opt in searchOptions"
+          :key="opt.value"
+          @click="handleSearchSelect(opt.value)"
+          class="search-option-item"
+        >
+          <a-list-item-meta :title="opt.label">
+            <template #avatar>
+              <IconDashboard />
+            </template>
+          </a-list-item-meta>
+        </a-list-item>
+      </a-list>
+      <a-empty v-else-if="searchKeyword" description="没有匹配的菜单" style="padding: 24px" />
+      <div v-else class="search-tip">输入关键词以快速跳转</div>
+    </div>
+  </a-modal>
+
+  <!-- 通知中心抽屉 -->
+  <a-drawer
+    v-model:visible="notifyVisible"
+    :width="380"
+    title="通知中心"
+    placement="right"
+  >
+    <a-empty v-if="!notifications.length" description="暂无通知">
+      <template #image>
+        <IconNotification />
+      </template>
+    </a-empty>
+    <a-list v-else :data="notifications">
+      <template #item="{ item }">
+        <a-list-item>
+          <a-list-item-meta :title="item.title" :description="item.desc" />
+        </a-list-item>
+      </template>
+    </a-list>
+  </a-drawer>
 </template>
 
-<style scoped>
-.layout-container {
+<style lang="scss" scoped>
+.layout-root {
   height: 100%;
 }
 
-.layout-aside {
-  background-color: #304156;
+.layout-sider {
+  background-color: var(--color-bg-2);
+  border-right: 1px solid var(--color-border-2);
   display: flex;
   flex-direction: column;
+  height: 100%;
+
+  :deep(.arco-layout-sider-children) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 60px;
-  padding: 0 20px;
-  color: #fff;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
   font-size: 16px;
   font-weight: 600;
+  color: var(--color-text-1);
   white-space: nowrap;
   overflow: hidden;
+  border-bottom: 1px solid var(--color-border-2);
+
+  .logo-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgb(var(--primary-6)), rgb(var(--success-6)));
+    color: #fff;
+    flex-shrink: 0;
+    font-size: 18px;
+  }
+
+  .logo-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
-.logo-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 菜单样式覆盖，适配深色背景 */
 .layout-menu {
-  border-right: none;
-  background-color: #304156;
   flex: 1;
+  background-color: transparent;
+  border-right: none;
 }
 
-.layout-menu .el-menu-item {
-  color: #bfcbd9;
-}
-
-.layout-menu .el-menu-item:hover {
-  background-color: #263445;
-  color: #fff;
-}
-
-.layout-menu .el-menu-item.is-active {
-  background-color: #1f2d3d;
-  color: #409eff;
-}
-
-/* 左下角外观切换 */
-.aside-footer {
-  padding: 12px 20px;
-  border-top: 1px solid #263445;
-  background-color: #2b3648;
-}
-
-.theme-switch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #bfcbd9;
-}
-
-.theme-switch :deep(.el-switch) {
-  --el-switch-on-color: #409eff;
+.layout-body {
+  background-color: var(--color-fill-1);
 }
 
 .layout-header {
   display: flex;
   align-items: center;
-  background-color: #fff;
-  border-bottom: 1px solid #e6e6e6;
+  justify-content: space-between;
+  background-color: var(--color-bg-1);
+  border-bottom: 1px solid var(--color-border-2);
+  padding: 0 16px;
+  height: 56px;
+
+  .header-left,
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .header-breadcrumb {
+    margin-left: 8px;
+  }
+
+  .header-action {
+    color: var(--color-text-2);
+    &:hover {
+      color: rgb(var(--primary-6));
+      background-color: var(--color-fill-2);
+    }
+  }
+
+  .collapse-btn {
+    color: var(--color-text-1);
+  }
 }
 
-.header-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
+.layout-content {
+  padding: 16px;
+  min-height: 0;
 }
 
-.layout-main {
-  background-color: #f0f2f5;
-  padding: 20px;
+// 全局搜索弹窗样式
+.global-search {
+  display: flex;
+  flex-direction: column;
+
+  .global-search-input {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border-2);
+  }
+
+  .search-options {
+    max-height: 360px;
+    overflow-y: auto;
+  }
+
+  .search-option-item {
+    cursor: pointer;
+    padding: 10px 16px;
+
+    &:hover {
+      background-color: var(--color-fill-2);
+    }
+  }
+
+  .search-tip {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--color-text-3);
+    font-size: 13px;
+  }
 }
 
-/* 深色模式适配 */
-:global(.dark) .layout-header {
-  background-color: #1d1e1f;
-  border-bottom-color: #303030;
+// 路由切换动画
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease;
 }
-:global(.dark) .header-title {
-  color: #e5eaf3;
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
-:global(.dark) .layout-main {
-  background-color: #141414;
+
+// 移动端适配
+@media (max-width: 768px) {
+  .layout-content {
+    padding: 12px;
+  }
 }
 </style>

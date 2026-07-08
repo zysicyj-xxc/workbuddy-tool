@@ -1,0 +1,87 @@
+// 全局样式 - 仅做基础重置和通用工具类，组件样式由 Arco Design Vue 提供
+// 字体：优先 Google Sans（私有字体，若系统已安装则使用），其次 Inter（Google Fonts 开源字体，视觉相近）
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Google Sans', 'Inter', 'Helvetica Neue', Helvetica,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+}
+
+// 等宽字体同步使用 Google Sans Mono 风格，回落到系统等宽
+code,
+pre,
+.text-mono {
+  font-family: 'Google Sans Mono', 'JetBrains Mono', 'Consolas', 'Monaco',
+    'Courier New', monospace;
+}
+
+// 通用工具类（避免反复写 inline style）
+.page-container {
+  padding: 16px;
+}
+
+.section-gap {
+  margin-top: 16px;
+}
+
+.flex {
+  display: flex;
+
+  &-center {
+    align-items: center;
+    justify-content: center;
+  }
+
+  &-between {
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &-start {
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  &-gap-8 {
+    gap: 8px;
+  }
+
+  &-gap-12 {
+    gap: 12px;
+  }
+
+  &-gap-16 {
+    gap: 16px;
+  }
+}
+
+.text-secondary {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.text-warning {
+  color: rgb(var(--warning-6));
+}
+
+// 滚动条美化（保持系统原生体验）
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-fill-3);
+  border-radius: 4px;
+
+  &:hover {
+    background-color: var(--color-fill-4);
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

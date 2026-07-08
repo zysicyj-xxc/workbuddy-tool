@@ -1,14 +1,18 @@
 <script setup>
-// 资源包管理页面 - 汇总所有账号的资源包（与上游 Key 代理池无关）
-// 数据来源：/api/quota/packages/all 遍历账号管理中的每个账号，
-// 调用 get_user_resource() 获取资源包列表后聚合，等同于账号详情的汇总
+// 资源包管理页面 - 汇总所有账号的资源包
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import {
+  IconRefresh,
+  IconSearch,
+  IconStorage,
+  IconCheckCircle,
+  IconCloseCircle,
+  IconExclamationCircle,
+} from '@arco-design/web-vue/es/icon'
 import { quotaApi } from '../api'
 
 const loading = ref(false)
 const packages = ref([])
-// 筛选
 const statusFilter = ref('')
 const searchKey = ref('')
 
@@ -20,7 +24,6 @@ const statusOptions = [
   { label: '未知', value: 'unknown' },
 ]
 
-// 过滤后的资源包
 const filteredPackages = computed(() => {
   let list = packages.value
   if (statusFilter.value) {
@@ -39,7 +42,6 @@ const filteredPackages = computed(() => {
   return list
 })
 
-// 汇总统计
 const summary = computed(() => {
   const total = packages.value.length
   const valid = packages.value.filter((p) => p.status === 'ok').length
@@ -54,19 +56,19 @@ const summary = computed(() => {
   return { total, valid, expired, exhausted, totalRemain, totalCapacity }
 })
 
-// 状态映射
 function pkgStatusType(status) {
-  if (status === 'ok') return 'success'
-  if (status === 'expired') return 'danger'
-  if (status === 'exhausted') return 'info'
-  return 'warning'
+  // 返回 Arco 预设颜色名（保证浅色模式下文字清晰）
+  if (status === 'ok') return 'green'
+  if (status === 'expired') return 'red'
+  if (status === 'exhausted') return 'gray'
+  return 'orange'
 }
+
 function pkgStatusText(status) {
   const map = { ok: '有效', expired: '已过期', exhausted: '已耗尽', unknown: '未知' }
   return map[status] || status
 }
 
-// 格式化过期时间
 function formatCycleEnd(cycleEnd, endTs) {
   if (!cycleEnd) return '-'
   if (endTs) {
@@ -77,7 +79,6 @@ function formatCycleEnd(cycleEnd, endTs) {
   return cycleEnd
 }
 
-// 剩余天数
 function daysLeft(endTs) {
   if (!endTs) return null
   const diff = endTs - Date.now() / 1000
@@ -85,29 +86,35 @@ function daysLeft(endTs) {
   return Math.ceil(diff / 86400)
 }
 
-// 剩余天数对应的标签类型
 function daysLeftType(endTs) {
+  // 返回 Arco 预设颜色名
   const days = daysLeft(endTs)
-  if (days === null) return 'info'
-  if (days === 0) return 'danger'
-  if (days <= 3) return 'danger'
-  if (days <= 7) return 'warning'
-  return 'success'
+  if (days === null) return 'arcoblue'
+  if (days === 0) return 'red'
+  if (days <= 3) return 'red'
+  if (days <= 7) return 'orange'
+  return 'green'
 }
 
-// 使用进度颜色
 function usageColor(percentage) {
   const remain = 100 - (percentage || 0)
-  if (remain > 50) return '#67c23a'
-  if (remain > 20) return '#e6a23c'
-  return '#f56c6c'
+  if (remain > 50) return '#00b42a'
+  if (remain > 20) return '#ff7d00'
+  return '#f53f3f'
 }
 
-// 加载资源包列表
-async function loadPackages() {
+// 5 分钟内不重复请求后端（避免频繁刷新卡顿）
+const CACHE_TTL = 5 * 60 * 1000
+let lastLoadTs = 0
+
+async function loadPackages(force = false) {
+  if (!force && Date.now() - lastLoadTs < CACHE_TTL && packages.value.length) {
+    return
+  }
   loading.value = true
   try {
     packages.value = (await quotaApi.getAllPackages()) || []
+    lastLoadTs = Date.now()
   } catch (e) {
     // 错误已由拦截器提示
   } finally {
@@ -115,117 +122,245 @@ async function loadPackages() {
   }
 }
 
+// 强制刷新（绕过缓存）
+function forceRefresh() {
+  loadPackages(true)
+}
+
+// 积分取整
+function formatInt(v) {
+  const n = Number(v || 0)
+  if (isNaN(n)) return 0
+  return Math.round(n)
+}
+
 onMounted(loadPackages)
 </script>
 
 <template>
-  <div v-loading="loading">
-    <!-- 顶部汇总卡片 -->
-    <el-row :gutter="16" style="margin-bottom: 16px">
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <el-statistic title="资源包总数" :value="summary.total" />
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <el-statistic title="有效资源包" :value="summary.valid" />
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <el-statistic title="剩余/总容量" :value="summary.totalRemain" />
-          <div style="font-size: 12px; color: #909399; margin-top: 4px">
-            / {{ summary.totalCapacity }}
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <el-statistic title="已过期/耗尽" :value="summary.expired + summary.exhausted" />
-        </el-card>
-      </el-col>
-    </el-row>
+  <a-spin :loading="loading" class="page-spin">
+    <div class="packages-page">
+      <!-- 顶部汇总卡片 -->
+      <a-row :gutter="12" class="summary-row">
+        <a-col :xs="12" :sm="12" :md="6">
+          <a-card hoverable class="summary-card">
+            <div class="summary-body">
+              <div class="summary-icon summary-icon-blue">
+                <IconStorage />
+              </div>
+              <div class="summary-content">
+                <div class="summary-title">资源包总数</div>
+                <div class="summary-value">{{ summary.total }}</div>
+              </div>
+            </div>
+          </a-card>
+        </a-col>
+        <a-col :xs="12" :sm="12" :md="6">
+          <a-card hoverable class="summary-card">
+            <div class="summary-body">
+              <div class="summary-icon summary-icon-green">
+                <IconCheckCircle />
+              </div>
+              <div class="summary-content">
+                <div class="summary-title">有效资源包</div>
+                <div class="summary-value">{{ summary.valid }}</div>
+              </div>
+            </div>
+          </a-card>
+        </a-col>
+        <a-col :xs="12" :sm="12" :md="6">
+          <a-card hoverable class="summary-card">
+            <div class="summary-body">
+              <div class="summary-icon summary-icon-orange">
+                <IconExclamationCircle />
+              </div>
+              <div class="summary-content">
+                <div class="summary-title">剩余/总容量</div>
+                <div class="summary-value">{{ formatInt(summary.totalRemain) }}</div>
+                <div class="summary-desc">/ {{ formatInt(summary.totalCapacity) }}</div>
+              </div>
+            </div>
+          </a-card>
+        </a-col>
+        <a-col :xs="12" :sm="12" :md="6">
+          <a-card hoverable class="summary-card">
+            <div class="summary-body">
+              <div class="summary-icon summary-icon-red">
+                <IconCloseCircle />
+              </div>
+              <div class="summary-content">
+                <div class="summary-title">已过期/耗尽</div>
+                <div class="summary-value">{{ summary.expired + summary.exhausted }}</div>
+              </div>
+            </div>
+          </a-card>
+        </a-col>
+      </a-row>
 
-    <!-- 资源包列表 -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span>资源包列表（按到期时间升序，汇总自所有账号）</span>
-          <el-button type="primary" link @click="loadPackages">
-            <el-icon><Refresh /></el-icon>刷新
-          </el-button>
-        </div>
-      </template>
+      <!-- 资源包列表 -->
+      <a-card :bordered="true" style="margin-top: 16px">
+        <template #title>
+          <span>资源包列表</span>
+          <span class="text-secondary" style="font-weight: normal; margin-left: 8px">
+            （按到期时间升序，汇总自所有账号）
+          </span>
+        </template>
+        <template #extra>
+          <a-button type="text" size="small" @click="forceRefresh">
+            <template #icon><IconRefresh /></template>
+            刷新
+          </a-button>
+        </template>
 
-      <!-- 筛选栏 -->
-      <div style="margin-bottom: 12px; display: flex; gap: 12px; align-items: center">
-        <el-select v-model="statusFilter" placeholder="状态筛选" style="width: 140px" clearable>
-          <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
-        </el-select>
-        <el-input v-model="searchKey" placeholder="搜索账号/名称/类型" clearable style="width: 260px" />
-      </div>
+        <!-- 筛选栏 -->
+        <a-space style="margin-bottom: 12px">
+          <a-select
+            v-model="statusFilter"
+            placeholder="状态筛选"
+            style="width: 140px"
+            allow-clear
+          >
+            <a-option v-for="o in statusOptions" :key="o.value" :value="o.value">
+              {{ o.label }}
+            </a-option>
+          </a-select>
+          <a-input
+            v-model="searchKey"
+            placeholder="搜索账号/名称/类型"
+            allow-clear
+            style="width: 260px"
+          >
+            <template #prefix><IconSearch /></template>
+          </a-input>
+        </a-space>
 
-      <el-table :data="filteredPackages" stripe border>
-        <el-table-column label="所属账号" min-width="120">
-          <template #default="{ row }">{{ row.nickname || row.uid || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="资源包名称" min-width="180">
-          <template #default="{ row }">{{ row.package_name || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="类型" width="110">
-          <template #default="{ row }">{{ row.type_label || row.package_type || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="剩余/总容量" width="130">
-          <template #default="{ row }">
-            <span style="font-size: 12px; color: #909399">
-              {{ row.cycle_remain }} / {{ row.cycle_size }}
-            </span>
+        <a-table :data="filteredPackages" stripe :pagination="{ pageSize: 20, showTotal: true }">
+          <template #columns>
+            <a-table-column title="所属账号" :min-width="120">
+              <template #cell="{ record }">{{ record.nickname || record.uid || '-' }}</template>
+            </a-table-column>
+            <a-table-column title="资源包名称" :min-width="180">
+              <template #cell="{ record }">{{ record.package_name || '-' }}</template>
+            </a-table-column>
+            <a-table-column title="类型" :width="110">
+              <template #cell="{ record }">{{ record.type_label || record.package_type || '-' }}</template>
+            </a-table-column>
+            <a-table-column title="剩余/总容量" :width="130">
+              <template #cell="{ record }">
+                <span class="text-secondary">
+                  {{ formatInt(record.cycle_remain) }} / {{ formatInt(record.cycle_size) }}
+                </span>
+              </template>
+            </a-table-column>
+            <a-table-column title="使用进度" :min-width="180">
+              <template #cell="{ record }">
+                <a-progress
+                  :percent="record.usage_percentage"
+                  :color="usageColor(record.usage_percentage)"
+                  size="small"
+                />
+              </template>
+            </a-table-column>
+            <a-table-column title="到期时间" :min-width="180">
+              <template #cell="{ record }">
+                <div>{{ formatCycleEnd(record.cycle_end, record.cycle_end_ts) }}</div>
+                <a-tag
+                  v-if="daysLeft(record.cycle_end_ts) !== null"
+                  :color="daysLeftType(record.cycle_end_ts)"
+                  size="small"
+                  style="margin-top: 4px"
+                >
+                  {{ daysLeft(record.cycle_end_ts) === 0 ? '已到期' : `剩 ${daysLeft(record.cycle_end_ts)} 天` }}
+                </a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column title="状态" :width="100">
+              <template #cell="{ record }">
+                <a-tag :color="pkgStatusType(record.status)" size="small">
+                  {{ pkgStatusText(record.status) }}
+                </a-tag>
+              </template>
+            </a-table-column>
           </template>
-        </el-table-column>
-        <el-table-column label="使用进度" min-width="180">
-          <template #default="{ row }">
-            <el-progress
-              :percentage="row.usage_percentage"
-              :stroke-width="10"
-              :color="usageColor(row.usage_percentage)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="到期时间" min-width="180">
-          <template #default="{ row }">
-            <div>{{ formatCycleEnd(row.cycle_end, row.cycle_end_ts) }}</div>
-            <el-tag
-              v-if="daysLeft(row.cycle_end_ts) !== null"
-              :type="daysLeftType(row.cycle_end_ts)"
-              size="small"
-              style="margin-top: 4px"
-            >
-              {{ daysLeft(row.cycle_end_ts) === 0 ? '已到期' : `剩 ${daysLeft(row.cycle_end_ts)} 天` }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="pkgStatusType(row.status)" size="small">
-              {{ pkgStatusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
+        </a-table>
 
-      <el-empty
-        v-if="!loading && !filteredPackages.length"
-        :description="packages.length ? '没有符合条件的资源包' : '暂无资源包数据（资源包来自账号管理的每个账号实时查询）'"
-      />
-    </el-card>
-  </div>
+        <a-empty
+          v-if="!loading && !filteredPackages.length"
+          :description="packages.length ? '没有符合条件的资源包' : '暂无资源包数据（资源包来自账号管理的每个账号实时查询）'"
+          style="padding: 24px"
+        />
+      </a-card>
+    </div>
+  </a-spin>
 </template>
 
-<style scoped>
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+<style lang="scss" scoped>
+.page-spin {
+  width: 100%;
+}
+
+.text-secondary {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.summary-row {
+  margin-bottom: 4px;
+}
+
+.summary-card {
+  margin-bottom: 12px;
+
+  :deep(.arco-card-body) {
+    padding: 16px;
+  }
+
+  .summary-body {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .summary-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    color: #fff;
+    font-size: 20px;
+    flex-shrink: 0;
+
+    &-blue {
+      background: linear-gradient(135deg, #165dff, #4080ff);
+    }
+    &-green {
+      background: linear-gradient(135deg, #00b42a, #23c343);
+    }
+    &-orange {
+      background: linear-gradient(135deg, #ff7d00, #f7ba1e);
+    }
+    &-red {
+      background: linear-gradient(135deg, #f53f3f, #cb2634);
+    }
+  }
+
+  .summary-title {
+    font-size: 11px;
+    color: var(--color-text-3);
+  }
+
+  .summary-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--color-text-1);
+  }
+
+  .summary-desc {
+    font-size: 11px;
+    color: var(--color-text-3);
+    margin-top: 2px;
+  }
 }
 </style>

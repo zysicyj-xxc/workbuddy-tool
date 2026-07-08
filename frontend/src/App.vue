@@ -1,24 +1,20 @@
 <script setup>
-// 根组件 - 使用 el-config-provider 设置中文
+// 根组件 - 提供 Arco Config（中文 + 主题）
+import { computed, onMounted, ref } from 'vue'
 import MainLayout from './layouts/MainLayout.vue'
+import { useThemeStore } from './stores/theme'
+import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn'
+
+const theme = useThemeStore()
+const locale = zhCN
+
+onMounted(() => {
+  theme.init()
+})
 </script>
 
 <template>
-  <!-- 全局配置：中文语言 -->
-  <el-config-provider>
+  <a-config-provider :locale="locale">
     <MainLayout />
-  </el-config-provider>
+  </a-config-provider>
 </template>
-
-<style>
-/* 全局基础样式：去除默认 margin，占满高度 */
-html,
-body,
-#app {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', Arial, sans-serif;
-}
-</style>

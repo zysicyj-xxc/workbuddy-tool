@@ -1282,6 +1282,103 @@ class ProxyDatabase:
 
         return result
 
+    def get_stats_by_client(self, days: int = 7, limit: int = 20) -> list:
+        """按客户端 User-Agent 维度聚合请求统计
+
+        返回：[{client, requests, prompt_tokens, completion_tokens, total_tokens, credits}, ...]
+        按 requests 降序，最多 limit 条。
+
+        Args:
+            days: 1=今日 / 7=近7天 / 30=近30天 / None=从所有日志聚合
+            limit: 返回前 N 条
+        """
+        from collections import defaultdict
+
+        def _classify_client(ua: str) -> str:
+            """将 User-Agent 归类为可读的客户端名称"""
+            if not ua:
+                return "Unknown"
+            ua_lower = ua.lower()
+            # 常见 AI 客户端识别
+            if "cursor" in ua_lower:
+                return "Cursor"
+            if "claude" in ua_lower or "claudecode" in ua_lower:
+                return "Claude Code"
+            if "cline" in ua_lower or "roo" in ua_lower:
+                return "Cline/Roo"
+            if "aider" in ua_lower:
+                return "Aider"
+            if "continue" in ua_lower:
+                return "Continue"
+            if "copilot" in ua_lower or "github" in ua_lower:
+                return "GitHub Copilot"
+            if "openai" in ua_lower:
+                return "OpenAI Client"
+            if "anthropic" in ua_lower:
+                return "Anthropic SDK"
+            if "python" in ua_lower and "requests" in ua_lower:
+                return "Python Script"
+            if "node" in ua_lower or "axios" in ua_lower:
+                return "Node.js Client"
+            if "curl" in ua_lower:
+                return "curl"
+            if "postman" in ua_lower:
+                return "Postman"
+            if "mozilla" in ua_lower or "chrome" in ua_lower or "safari" in ua_lower:
+                return "Browser"
+            # 截断过长的 UA
+            return ua[:50] if len(ua) > 50 else ua
+
+        # 时间过滤
+        now_ts = time.time()
+        if days is None:
+            cutoff_ts = 0
+        elif days == 1:
+            today = datetime.now()
+            today_start = datetime(today.year, today.month, today.day)
+            cutoff_ts = today_start.timestamp()
+        else:
+            cutoff_ts = now_ts - days * 86400
+
+        agg = defaultdict(lambda: {
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "credits": 0.0,
+        })
+
+        with self._lock:
+            logs = self._data.get("request_logs", [])
+            for log in logs:
+                # 只统计 end 事件（实际成功完成的请求）
+                if log.get("event") not in ("end",):
+                    continue
+                ts = log.get("timestamp", 0)
+                if ts < cutoff_ts:
+                    continue
+                ua = log.get("user_agent", "")
+                client = _classify_client(ua)
+                agg[client]["requests"] += 1
+                agg[client]["prompt_tokens"] += int(log.get("prompt_tokens", 0) or 0)
+                agg[client]["completion_tokens"] += int(log.get("completion_tokens", 0) or 0)
+                # 注：request_logs 不记录 credits，从 daily_stats 按 sub_key 推算较复杂，
+                # 这里仅返回请求数和 token 数，credits 在前端聚合层留空
+                agg[client]["total_tokens"] = agg[client]["prompt_tokens"] + agg[client]["completion_tokens"]
+
+        # 转数组并排序
+        result = []
+        for client, data in agg.items():
+            result.append({
+                "client": client,
+                "requests": data["requests"],
+                "prompt_tokens": data["prompt_tokens"],
+                "completion_tokens": data["completion_tokens"],
+                "total_tokens": data["total_tokens"],
+            })
+        result.sort(key=lambda x: x["requests"], reverse=True)
+        return result[:limit]
+
     _points_query_timestamps: dict = {}  # {key_id: last_query_epoch}
 
     def refresh_key_points_if_needed(self, key_id: str):
@@ -2096,6 +2193,8 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
             upstream_status: 上游返回的HTTP状态码
             request_path: 请求路径
         """
+        # 自动捕获 User-Agent（用于客户端来源分析）
+        user_agent = self.headers.get("User-Agent", "") or self.headers.get("user-agent", "")
         self.db.add_request_log({
             "timestamp": time.time(),
             "sub_key_id": sub_key.get("key_id", "") if sub_key else "",
@@ -2110,6 +2209,7 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
             "error": error,
             "upstream_status": upstream_status,
             "request_path": request_path,
+            "user_agent": user_agent,
         })
 
     def _log_request(self, method: str, path: str):
@@ -3249,6 +3349,9 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
         duration_ms = int((time.time() - start_time) * 1000)
         logger.debug(f"[代理] 请求完成, 总耗时 {duration_ms}ms, 首字 {first_token_ms}ms")
 
+        # 提前抓取 user_agent，避免子线程访问 self.headers 风险
+        _req_user_agent = self.headers.get("User-Agent", "") or self.headers.get("user-agent", "")
+
         def _update_stats():
             try:
                 prompt_t = last_usage.get("prompt_tokens", 0)
@@ -3295,6 +3398,7 @@ class ProxyRequestHandler(BaseHTTPRequestHandler):
                     "prompt_tokens": last_usage.get("prompt_tokens", 0),
                     "completion_tokens": last_usage.get("completion_tokens", 0),
                     "first_token_ms": first_token_ms or 0,
+                    "user_agent": _req_user_agent,
                 })
 
                 # 请求完成后异步查分（限频 1 分钟/次）
