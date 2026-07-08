@@ -11,7 +11,7 @@ concurrency:
 
 env:
   CCR: ccr.ccs.tencentyun.com/zysicyj/storehouse1
-  KUBECONFIG: c:\code\.kube\config
+  KUBECONFIG_FILE: c:\code\.kube\config
   DOCKER_BUILDKIT: "1"
   DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
   KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
@@ -52,32 +52,37 @@ jobs:
 
       - name: Ensure namespace and secrets
         run: |
-          & $env:KUBECTL_EXE create namespace $env:NAMESPACE --dry-run=client -o yaml | & $env:KUBECTL_EXE apply -f -
-          # 从 default 命名空间复制镜像仓库凭据和 TLS 证书到目标命名空间
+          $k = $env:KUBECTL_EXE
+          $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
+          & $k $kc create namespace $env:NAMESPACE --dry-run=client -o yaml | & $k $kc apply -f -
           foreach ($s in @('ccr-registry','zysicyj-tls')) {
-            $exists = & $env:KUBECTL_EXE get secret $s -n $env:NAMESPACE --ignore-not-found -o name 2>$null
+            $exists = & $k $kc get secret $s -n $env:NAMESPACE --ignore-not-found -o name 2>$null
             if ($exists) {
               Write-Host "Secret $s already exists in $($env:NAMESPACE), skip"
               continue
             }
             Write-Host "Copying secret $s from default to $($env:NAMESPACE)"
-            $json = & $env:KUBECTL_EXE get secret $s -n default -o json
+            $json = & $k $kc get secret $s -n default -o json
             $obj = $json | ConvertFrom-Json
             $obj.metadata.PSObject.Properties.Remove('uid')
             $obj.metadata.PSObject.Properties.Remove('resourceVersion')
             $obj.metadata.PSObject.Properties.Remove('creationTimestamp')
             $obj.metadata.namespace = $env:NAMESPACE
-            $obj | ConvertTo-Json -Depth 10 | & $env:KUBECTL_EXE apply -n $env:NAMESPACE -f -
+            $obj | ConvertTo-Json -Depth 10 | & $k $kc apply -n $env:NAMESPACE -f -
           }
 
       - name: Apply K8s manifests
         run: |
-          & $env:KUBECTL_EXE apply -f deploy/k8s.yaml
+          $k = $env:KUBECTL_EXE
+          $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
+          & $k $kc apply -f deploy/k8s.yaml
 
       - name: Rollout deployment
         run: |
-          & $env:KUBECTL_EXE set image deploy/$env:DEPLOY_NAME $env:DEPLOY_NAME="$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)" -n $env:NAMESPACE
-          & $env:KUBECTL_EXE rollout status deploy/$env:DEPLOY_NAME -n $env:NAMESPACE --timeout=300s
+          $k = $env:KUBECTL_EXE
+          $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
+          & $k $kc set image deploy/$env:DEPLOY_NAME $env:DEPLOY_NAME="$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)" -n $env:NAMESPACE
+          & $k $kc rollout status deploy/$env:DEPLOY_NAME -n $env:NAMESPACE --timeout=300s
 
       - name: Verify browser access
         run: |
@@ -99,6 +104,8 @@ jobs:
       - name: Show rollout status
         if: always()
         run: |
-          & $env:KUBECTL_EXE get pods -n $env:NAMESPACE -o wide
-          & $env:KUBECTL_EXE get ingress -n $env:NAMESPACE
-          & $env:KUBECTL_EXE get events -n $env:NAMESPACE --sort-by='.lastTimestamp' --field-selector type!=Normal | Select-Object -Last 20 | ForEach-Object { Write-Host $_ }
+          $k = $env:KUBECTL_EXE
+          $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
+          & $k $kc get pods -n $env:NAMESPACE -o wide
+          & $k $kc get ingress -n $env:NAMESPACE
+          & $k $kc get events -n $env:NAMESPACE --sort-by='.lastTimestamp' --field-selector type!=Normal
