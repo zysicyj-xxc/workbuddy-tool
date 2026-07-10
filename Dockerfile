@@ -18,15 +18,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 安装系统依赖（cryptography 需要编译，slim 镜像补齐 gcc/libffi）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安装 Python 依赖
+# 安装 Python 依赖（使用预编译 wheel，不需要 gcc）
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+RUN pip install --only-binary :all: --no-cache-dir -r /app/backend/requirements.txt
 
 # 拷贝后端代码（保留 backend/ 目录结构，与 main.py 的路径解析一致）
 COPY backend/ /app/backend/
