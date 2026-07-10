@@ -7,7 +7,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 
 # 数据目录名（位于用户主目录下）
-_DATA_DIR_NAME = ".antigravity-tools"
+_DATA_DIR_NAME = ".workbuddy-tool"
 # 密钥文件名
 _KEY_FILE_NAME = "secret.key"
 
@@ -15,7 +15,7 @@ _KEY_FILE_NAME = "secret.key"
 def get_data_dir() -> Path:
     """获取数据目录路径（不存在则创建）
 
-    返回 ~/.antigravity-tools 目录。如果用户主目录不可写，
+    返回 ~/.workbuddy-tool 目录。如果用户主目录不可写，
     回退到项目根目录下的 data 目录。
     """
     app_dir = Path.home() / _DATA_DIR_NAME
@@ -32,7 +32,7 @@ def get_data_dir() -> Path:
 def get_or_create_key() -> bytes:
     """获取或自动生成 Fernet 加密密钥
 
-    读取 ~/.antigravity-tools/secret.key，如果不存在则自动生成
+    读取 ~/.workbuddy-tool/secret.key，如果不存在则自动生成
     新的 Fernet 密钥并保存到文件。
 
     Returns:

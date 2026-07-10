@@ -297,7 +297,7 @@ def get_stats_by_client(days: int = 7, limit: int = 20):
 def list_log_files():
     """获取日志文件列表
 
-    读取 ~/.antigravity-tools/logs/ 目录，返回文件列表按修改时间倒序排列。
+    读取 ~/.workbuddy-tool/logs/ 目录，返回文件列表按修改时间倒序排列。
     """
     logs_dir = os.path.join(str(get_data_dir()), "logs")
     if not os.path.exists(logs_dir):

@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: antigravity
+  name: workbuddy
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: antigravity-data
-  namespace: antigravity
+  name: workbuddy-data
+  namespace: workbuddy
 spec:
   accessModes:
     - ReadWriteOnce
@@ -18,10 +18,10 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: antigravity-web
-  namespace: antigravity
+  name: workbuddy-tool
+  namespace: workbuddy
   labels:
-    app: antigravity-web
+    app: workbuddy-tool
 spec:
   replicas: 1
   strategy:
@@ -31,17 +31,17 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: antigravity-web
+      app: workbuddy-tool
   template:
     metadata:
       labels:
-        app: antigravity-web
+        app: workbuddy-tool
     spec:
       imagePullSecrets:
         - name: ccr-registry
       containers:
-        - name: antigravity-web
-          image: ccr.ccs.tencentyun.com/zysicyj/storehouse1:antigravity-web-latest
+        - name: workbuddy-tool
+          image: ccr.ccs.tencentyun.com/zysicyj/storehouse1:workbuddy-tool-latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -71,21 +71,21 @@ spec:
             failureThreshold: 3
           volumeMounts:
             - name: data
-              mountPath: /root/.antigravity-tools
+              mountPath: /root/.workbuddy-tool
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: antigravity-data
+            claimName: workbuddy-data
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: antigravity-web
-  namespace: antigravity
+  name: workbuddy-tool
+  namespace: workbuddy
 spec:
   type: ClusterIP
   selector:
-    app: antigravity-web
+    app: workbuddy-tool
   ports:
     - name: http
       port: 8000
@@ -95,25 +95,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: antigravity-ingress
-  namespace: antigravity
+  name: workbuddy-ingress
+  namespace: workbuddy
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik
   rules:
-    - host: antigravity.zysicyj.top
+    - host: workbuddy.zysicyj.top
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: antigravity-web
+                name: workbuddy-tool
                 port:
                   number: 8000
   tls:
     - hosts:
-        - antigravity.zysicyj.top
+        - workbuddy.zysicyj.top
       secretName: zysicyj-tls

@@ -1,6 +1,6 @@
 """本地数据存储 - 加密 JSON 文件持久化
 
-使用 Fernet 对称加密将账号和设置数据存储到 ~/.antigravity-tools/data.enc。
+使用 Fernet 对称加密将账号和设置数据存储到 ~/.workbuddy-tool/data.enc。
 默认启动时数据为空（不读取旧版 SQLite 数据库）。
 """
 

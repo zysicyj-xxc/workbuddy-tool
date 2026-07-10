@@ -38,9 +38,9 @@ COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 WORKDIR /app/backend
 
-# 数据持久化目录（~/.antigravity-tools 在 root 下）
-RUN mkdir -p /root/.antigravity-tools
-VOLUME /root/.antigravity-tools
+# 数据持久化目录（~/.workbuddy-tool 在 root 下）
+RUN mkdir -p /root/.workbuddy-tool
+VOLUME /root/.workbuddy-tool
 
 EXPOSE 8000
 

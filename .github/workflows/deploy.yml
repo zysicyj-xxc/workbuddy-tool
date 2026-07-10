@@ -1,4 +1,4 @@
-name: Build and Deploy Antigravity-Web
+name: Build and Deploy WorkBuddy-Tool
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: antigravity-deploy
+  group: workbuddy-deploy
   cancel-in-progress: true
 
 env:
@@ -15,10 +15,10 @@ env:
   DOCKER_BUILDKIT: "1"
   DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
   KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
-  NAMESPACE: antigravity
-  DEPLOY_NAME: antigravity-web
-  IMAGE_NAME: antigravity-web
-  HOST: antigravity.zysicyj.top
+  NAMESPACE: workbuddy
+  DEPLOY_NAME: workbuddy-tool
+  IMAGE_NAME: workbuddy-tool
+  HOST: workbuddy.zysicyj.top
 
 jobs:
   build-and-deploy:

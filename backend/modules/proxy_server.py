@@ -838,7 +838,7 @@ class ProxyDatabase:
     def __init__(self, data_dir: str = ""):
         import os
         if not data_dir:
-            data_dir = os.path.expanduser("~/.antigravity-tools")
+            data_dir = os.path.expanduser("~/.workbuddy-tool")
         os.makedirs(data_dir, exist_ok=True)
         self._db_path = os.path.join(data_dir, "proxy_db.json")
         # 文件日志目录（每天一个日志文件 proxy-YYYY-MM-DD.log）
