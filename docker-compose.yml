@@ -1,0 +1,62 @@
+# 本地一键：空 MySQL + workbuddy-tool
+# 用法：
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# 注意：MySQL 用户名/密码在 compose 内写死为本地默认值，
+# 避免宿主机已有 MYSQL_USER=root 等环境变量污染初始化。
+# 改密码请直接改本文件或改用外部托管 MySQL + DB_CONF。
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: workbuddy-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: workbuddy_root
+      MYSQL_DATABASE: antigravity
+      MYSQL_USER: workbuddy
+      MYSQL_PASSWORD: workbuddy_pass
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - workbuddy_mysql_data:/var/lib/mysql
+      - ./deploy/mysql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pworkbuddy_root"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 25s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: workbuddy-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8000}:8000"
+      - "${PROXY_PORT:-8002}:8002"
+    environment:
+      TZ: Asia/Shanghai
+      DB_CONF: '{"host":"mysql","port":3306,"user":"workbuddy","passwd":"workbuddy_pass","database":"antigravity","charset":"utf8mb4"}'
+      DATA_PACKAGE_PASSWORD: ${DATA_PACKAGE_PASSWORD:-workbuddy-change-me}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-admin}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-}
+      HTTP_SSL_VERIFY: ${HTTP_SSL_VERIFY:-true}
+      OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
+    volumes:
+      - workbuddy_app_data:/root/.workbuddy-tool
+
+volumes:
+  workbuddy_mysql_data:
+  workbuddy_app_data:

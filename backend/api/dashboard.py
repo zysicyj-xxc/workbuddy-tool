@@ -18,10 +18,8 @@ def get_dashboard():
     exhausted_count = sum(1 for a in accounts if a.status.value == "quota_exhausted")
     error_count = sum(1 for a in accounts if a.status.value == "error")
 
-    # 签到统计
-    from datetime import datetime
-    today = datetime.now().strftime("%Y-%m-%d")
-    checked_today = sum(1 for a in accounts if a.checkin.last_checkin_time and a.checkin.last_checkin_time.strftime("%Y-%m-%d") == today)
+    # 签到统计（与 Account.checkin.checked_today 同一套本地日逻辑）
+    checked_today = sum(1 for a in accounts if a.checkin.checked_today)
 
     # 代理统计
     db = ProxyDatabase.get_instance()

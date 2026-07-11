@@ -1,29 +1,69 @@
 <script setup>
-// 每日签到页面 - 批量签到、单账号签到、签到结果展示
-import { ref, onMounted } from 'vue'
+// 每日签到页面 - 批量签到、单账号签到、定时签到配置
+import { ref, reactive, onMounted, computed } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
-import { IconCheck, IconRefresh } from '@arco-design/web-vue/es/icon'
+import { IconCheck, IconClockCircle } from '@arco-design/web-vue/es/icon'
 import { accountsApi, checkinApi } from '../api'
 
 const loading = ref(false)
 const accounts = ref([])
-const batchResult = ref(null)
+const checkingUid = ref('')
+const scheduleSaving = ref(false)
+const schedule = reactive({
+  enabled: true,
+  hour: 0,
+  minute: 30,
+  next_run: null,
+})
 
-// 判断今日是否已签到
+// 批量签到实时进度
+const progress = reactive({
+  running: false,
+  total: 0,
+  current: 0,
+  currentAccount: '',
+  success: 0,
+  failed: 0,
+  already: 0,
+  list: [],
+})
+
+const scheduleTimeValue = computed({
+  get() {
+    return `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
+  },
+  set(v) {
+    if (!v || typeof v !== 'string') return
+    const [h, m] = v.split(':').map((x) => parseInt(x, 10))
+    if (!Number.isNaN(h)) schedule.hour = h
+    if (!Number.isNaN(m)) schedule.minute = m
+  },
+})
+
 function isCheckedToday(row) {
+  if (typeof row.checkin?.checked_today === 'boolean') {
+    return row.checkin.checked_today
+  }
   const last = row.checkin?.last_checkin_time
   if (!last) return false
-  return new Date(last).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
+  const d = new Date(last)
+  const now = new Date()
+  return d.getFullYear() === now.getFullYear() &&
+         d.getMonth() === now.getMonth() &&
+         d.getDate() === now.getDate()
 }
 
-// 格式化签到时间
 function formatTime(row) {
   const last = row.checkin?.last_checkin_time
   if (!last) return '从未签到'
   return new Date(last).toLocaleString('zh-CN')
 }
 
-// 加载账号列表
+function formatNextRun(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('zh-CN')
+}
+
 async function loadAccounts() {
   loading.value = true
   try {
@@ -33,101 +73,208 @@ async function loadAccounts() {
   }
 }
 
-// 批量签到
+async function loadSchedule() {
+  try {
+    const res = await checkinApi.getSchedule()
+    schedule.enabled = !!res.enabled
+    schedule.hour = res.hour ?? 0
+    schedule.minute = res.minute ?? 30
+    schedule.next_run = res.next_run || null
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+async function saveSchedule() {
+  scheduleSaving.value = true
+  try {
+    const res = await checkinApi.updateSchedule({
+      enabled: schedule.enabled,
+      hour: schedule.hour,
+      minute: schedule.minute,
+    })
+    schedule.enabled = !!res.enabled
+    schedule.hour = res.hour
+    schedule.minute = res.minute
+    schedule.next_run = res.next_run || null
+    Message.success(
+      res.enabled
+        ? `定时签到已开启，每日 ${res.time} 自动签到`
+        : '定时签到已关闭'
+    )
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
 function checkinAll() {
-  Modal.info({
+  Modal.confirm({
     title: '批量签到',
-    content: '确定要对所有账号执行批量签到吗？',
-    hideCancel: false,
+    content: '确定要对所有账号执行批量签到吗？失败会自动重试 3 次。',
     okText: '开始签到',
     onOk: async () => {
-      loading.value = true
+      progress.running = true
+      progress.total = 0
+      progress.current = 0
+      progress.currentAccount = ''
+      progress.success = 0
+      progress.failed = 0
+      progress.already = 0
+      progress.list = []
       try {
-        const res = await checkinApi.checkinAll()
-        batchResult.value = res
+        await checkinApi.checkinAllStream((event, data) => {
+          if (event === 'start') {
+            progress.total = data.total
+          } else if (event === 'progress') {
+            if (data.status === 'checking') {
+              progress.current = data.current
+              progress.currentAccount = data.account
+            } else {
+              progress.current = data.current
+              progress.currentAccount = ''
+              progress.list.push({
+                account: data.account,
+                status: data.status,
+                retries: data.retries || 0,
+                streak: data.streak,
+                error: data.error,
+                message: data.message,
+              })
+              if (data.status === 'success') progress.success++
+              else if (data.status === 'failed') progress.failed++
+              else if (data.status === 'already') progress.already++
+            }
+          } else if (event === 'retry') {
+            progress.currentAccount = `${data.account}（第 ${data.attempt} 次重试…）`
+          } else if (event === 'done') {
+            progress.total = progress.total || (progress.success + progress.failed + progress.already)
+            progress.current = progress.total
+          }
+        })
         Message.success(
-          `批量签到完成：成功 ${res.success}，失败 ${res.failed}，已签 ${res.already || 0}`
+          `批量签到完成：成功 ${progress.success}，失败 ${progress.failed}，已签 ${progress.already}`
         )
         loadAccounts()
       } finally {
-        loading.value = false
+        progress.running = false
       }
     },
   })
 }
 
-// 单账号签到
 async function checkinAccount(row) {
+  if (checkingUid.value) return
+  checkingUid.value = row.uid
   try {
-    await checkinApi.checkin(row.uid)
-    Message.success(`账号「${row.nickname}」签到成功`)
-    loadAccounts()
+    const res = await checkinApi.checkin(row.uid)
+    if (res.already) {
+      Message.info(`账号「${row.nickname}」今日已签到`)
+    } else if (res.success) {
+      Message.success(`账号「${row.nickname}」签到成功`)
+    } else {
+      Message.warning(res.error || '签到失败')
+    }
+    await loadAccounts()
   } catch (e) {
     // 错误已由拦截器提示
+  } finally {
+    checkingUid.value = ''
   }
 }
 
-// 积分取整
 function formatInt(v) {
   const n = Number(v || 0)
   if (isNaN(n)) return 0
   return Math.round(n)
 }
 
-onMounted(loadAccounts)
+onMounted(() => {
+  loadAccounts()
+  loadSchedule()
+})
 </script>
 
 <template>
   <a-spin :loading="loading" class="page-spin">
     <div class="checkin-page">
-      <!-- 顶部操作栏 -->
+      <!-- 顶部：批量签到 + 定时签到 -->
       <a-card :bordered="true" style="margin-bottom: 12px">
         <div class="toolbar">
-          <a-button type="primary" @click="checkinAll">
+          <a-button type="primary" :loading="progress.running" @click="checkinAll">
             <template #icon><IconCheck /></template>
             批量签到
           </a-button>
-          <a-button @click="loadAccounts">
-            <template #icon><IconRefresh /></template>
-            刷新
-          </a-button>
+
+          <div class="schedule-box">
+            <IconClockCircle class="schedule-icon" />
+            <span class="schedule-label">定时签到</span>
+            <a-switch v-model="schedule.enabled" :disabled="scheduleSaving" />
+            <a-time-picker
+              v-model="scheduleTimeValue"
+              format="HH:mm"
+              value-format="HH:mm"
+              :disable-confirm="true"
+              style="width: 110px"
+              :disabled="scheduleSaving || !schedule.enabled"
+            />
+            <a-button type="outline" size="small" :loading="scheduleSaving" @click="saveSchedule">
+              保存
+            </a-button>
+            <span v-if="schedule.enabled && schedule.next_run" class="schedule-next">
+              下次：{{ formatNextRun(schedule.next_run) }}
+            </span>
+            <span v-else-if="!schedule.enabled" class="schedule-next text-secondary">已关闭</span>
+          </div>
         </div>
       </a-card>
 
-      <!-- 批量签到结果展示 -->
+      <!-- 批量签到实时进度 -->
       <a-card
-        v-if="batchResult"
+        v-if="progress.running || progress.list.length"
         :bordered="true"
-        title="批量签到结果"
+        :title="progress.running ? '批量签到进行中…' : '批量签到结果'"
         style="margin-bottom: 12px"
       >
-        <a-descriptions :column="3" bordered :data="[
-          { label: '成功', value: batchResult.success },
-          { label: '失败', value: batchResult.failed },
-          { label: '已签到', value: batchResult.already || 0 },
-        ]" />
+        <a-progress
+          :percent="progress.total ? Math.min(1, (progress.success + progress.failed + progress.already) / progress.total) : 0"
+          :status="progress.failed ? 'warning' : 'success'"
+        />
+        <div class="progress-bar">
+          正在签到：<b>{{ progress.currentAccount || '—' }}</b>
+          （{{ progress.success + progress.failed + progress.already }}/{{ progress.total }}）｜
+          已签 <span class="ok"> {{ progress.success }} </span>
+          失败 <span class="bad"> {{ progress.failed }} </span>
+          剩余 {{ Math.max(progress.total - (progress.success + progress.failed + progress.already), 0) }}
+        </div>
 
         <a-table
-          v-if="batchResult.details && batchResult.details.length"
-          :data="batchResult.details"
+          :data="progress.list"
           stripe
+          size="small"
           :pagination="false"
           style="margin-top: 12px"
         >
           <template #columns>
-            <a-table-column title="账号" data-index="nickname" :min-width="120" />
-            <a-table-column title="状态" :width="100">
+            <a-table-column title="账号" data-index="account" :min-width="120" />
+            <a-table-column title="状态" :width="90">
               <template #cell="{ record }">
-                <a-tag :color="record.status === 'success' ? 'green' : 'red'" size="small">
-                  {{ record.status === 'success' ? '成功' : '失败' }}
+                <a-tag
+                  :color="record.status === 'success' ? 'green' : record.status === 'failed' ? 'red' : 'gray'"
+                  size="small"
+                >
+                  {{ record.status === 'success' ? '成功' : record.status === 'failed' ? '失败' : '已签' }}
                 </a-tag>
               </template>
             </a-table-column>
+            <a-table-column title="重试" :width="70" align="center">
+              <template #cell="{ record }">{{ record.retries > 0 ? record.retries + ' 次' : '—' }}</template>
+            </a-table-column>
             <a-table-column title="详情" :min-width="200">
               <template #cell="{ record }">
-                <span v-if="record.status === 'success'">
-                  剩余 {{ formatInt(record.remaining) }} / 总 {{ formatInt(record.total) }}
-                </span>
+                <span v-if="record.status === 'success'">连续 {{ record.streak || 0 }} 天</span>
+                <span v-else-if="record.status === 'already'">{{ record.message }}</span>
                 <span v-else class="text-danger">{{ record.error }}</span>
               </template>
             </a-table-column>
@@ -171,7 +318,8 @@ onMounted(loadAccounts)
                 <a-button
                   size="small"
                   type="primary"
-                  :disabled="isCheckedToday(record)"
+                  :loading="checkingUid === record.uid"
+                  :disabled="isCheckedToday(record) || (!!checkingUid && checkingUid !== record.uid)"
                   @click="checkinAccount(record)"
                 >
                   签到
@@ -194,6 +342,46 @@ onMounted(loadAccounts)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.schedule-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.schedule-icon {
+  color: var(--color-text-2);
+}
+
+.schedule-label {
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+
+.schedule-next {
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.text-secondary {
+  color: var(--color-text-3);
+}
+
+.progress-bar {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.ok {
+  color: rgb(var(--success-6));
+}
+
+.bad {
+  color: rgb(var(--danger-6));
 }
 
 .text-danger {

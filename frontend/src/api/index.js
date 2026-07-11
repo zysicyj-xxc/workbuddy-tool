@@ -50,8 +50,44 @@ export const checkinApi = {
   getStatus: (uid) => request.get(`/api/checkin/status/${uid}`),
   // 单账号签到
   checkin: (uid) => request.post(`/api/checkin/${uid}`),
-  // 批量签到
+  // 批量签到（同步返回汇总，保留兼容）
   checkinAll: () => request.post('/api/checkin'),
+  // 定时签到配置
+  getSchedule: () => request.get('/api/checkin/schedule'),
+  updateSchedule: (data) => request.put('/api/checkin/schedule', data),
+  // 批量签到（流式实时进度，无超时）
+  // 后端以 SSE 形式逐条推送事件，前端用 fetch 读取 ReadableStream 实时回调
+  checkinAllStream: (onEvent) => {
+    return fetch('/api/checkin/stream', { method: 'POST' }).then((resp) => {
+      if (!resp.ok) throw new Error('批量签到请求失败: ' + resp.status)
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      return new Promise((resolve, reject) => {
+        const pump = () => {
+          reader.read().then(({ done, value }) => {
+            if (done) { resolve(); return }
+            buffer += decoder.decode(value, { stream: true })
+            let idx
+            while ((idx = buffer.indexOf('\n\n')) >= 0) {
+              const chunk = buffer.slice(0, idx)
+              buffer = buffer.slice(idx + 2)
+              const ev = {}
+              chunk.split('\n').forEach((line) => {
+                if (line.startsWith('event:')) ev.event = line.slice(6).trim()
+                else if (line.startsWith('data:')) ev.data = line.slice(5).trim()
+              })
+              if (ev.event && ev.data) {
+                try { onEvent(ev.event, JSON.parse(ev.data)) } catch (e) { /* ignore parse error */ }
+              }
+            }
+            pump()
+          }).catch(reject)
+        }
+        pump()
+      })
+    })
+  },
 }
 
 // ─── 积分 API ───
@@ -62,8 +98,9 @@ export const quotaApi = {
   refresh: () => request.post('/api/quota/refresh'),
   // 查询付费类型
   getPayment: (uid) => request.get(`/api/quota/${uid}/payment`),
-  // 所有账号资源包汇总（按到期时间升序）
-  getAllPackages: () => request.get('/api/quota/packages/all'),
+  // 所有账号资源包汇总（默认读 MySQL 缓存；refresh=true 强制打上游）
+  getAllPackages: (refresh = false) =>
+    request.get('/api/quota/packages/all', { params: refresh ? { refresh: true } : {} }),
 }
 
 // ─── API 代理 API ───
@@ -110,22 +147,36 @@ export const proxyApi = {
   getPackages: () => request.get('/api/proxy/packages'),
 }
 
-// ─── 数据包导入导出 API ───
+// ─── 数据包导入导出 API（MySQL 导出 / 空库导入）───
 export const dataApi = {
-  // 导出数据包
-  export: () => request.post('/api/data/export', {}, { responseType: 'blob' }),
-  // 导入旧版SQLite数据包
-  import: (file) => {
+  // 导出：从 MySQL + 代理存储打口令包
+  export: (password = '') =>
+    request.post('/api/data/export', null, {
+      responseType: 'blob',
+      params: password ? { password } : {},
+    }),
+  // 导入旧版 SQLite .db → MySQL
+  import: (file, { replace = false } = {}) => {
     const formData = new FormData()
     formData.append('file', file)
-    return request.post('/api/data/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+    formData.append('replace', replace ? 'true' : 'false')
+    return request.post('/api/data/import', formData)
   },
-  // 导入加密数据包
-  importEncrypted: (file) => {
+  // 导入加密包 → MySQL（空库可直接导入）
+  importEncrypted: (file, { password = '', replace = false } = {}) => {
     const formData = new FormData()
     formData.append('file', file)
-    return request.post('/api/data/import-encrypted', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+    if (password) formData.append('password', password)
+    formData.append('replace', replace ? 'true' : 'false')
+    return request.post('/api/data/import-encrypted', formData)
   },
+  // 清空全部数据（需 confirm=CLEAR）
+  clear: (opts = {}) =>
+    request.post('/api/data/clear', {
+      confirm: 'CLEAR',
+      clear_proxy: opts.clearProxy !== false,
+      clear_settings: opts.clearSettings !== false,
+    }),
 }
 
 export default {

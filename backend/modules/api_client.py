@@ -23,14 +23,18 @@ API 响应格式：
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
 import requests
 
 from models import Account, ResourcePackage, CheckinStatus
+from utils.network import get_ssl_verify
 
 logger = logging.getLogger(__name__)
+
+SSL_VERIFY = get_ssl_verify()
 
 # === API 基础 URL ===
 # 关键：积分/签到 API 在 copilot.tencent.com，不在 codebuddy.cn
@@ -177,7 +181,7 @@ class ApiClient:
         """
         url = f"{BILLING_API_BASE}{path}"
         try:
-            resp = self.session.post(url, json=body or {}, timeout=30)
+            resp = self.session.post(url, json=body or {}, timeout=30, verify=SSL_VERIFY)
 
             if not resp.ok:
                 # 非2xx响应：签到接口400+code=10001是正常的"已签到"，用warning级别
@@ -190,7 +194,7 @@ class ApiClient:
                     logger.info("收到 401，尝试刷新 token...")
                     if self._refresh_token():
                         self.session.headers["Authorization"] = f"Bearer {self.access_token}"
-                        resp = self.session.post(url, json=body or {}, timeout=30)
+                        resp = self.session.post(url, json=body or {}, timeout=30, verify=SSL_VERIFY)
                         if not resp.ok:
                             logger.error(f"API 重试仍失败 [POST {path}] status={resp.status_code} body={resp.text[:500]}")
                     else:
@@ -242,7 +246,7 @@ class ApiClient:
         }
 
         try:
-            resp = self.session.post(KEYCLOAK_TOKEN_URL, data=data, timeout=15)
+            resp = self.session.post(KEYCLOAK_TOKEN_URL, data=data, timeout=15, verify=SSL_VERIFY)
             if resp.status_code == 200:
                 result = resp.json()
                 self.access_token = result["access_token"]
@@ -357,18 +361,20 @@ class ApiClient:
             data = result.get("data", {})
             status = CheckinStatus(
                 active=data.get("active", False),
-                today_checked_in=data.get("today_checked_in", False),
-                streak_days=data.get("streak_days", 0),
-                daily_credit=data.get("daily_credit", 0),
-                today_credit=data.get("today_credit", 0),
-                is_streak_day=data.get("is_streak_day", False),
-                next_streak_day=data.get("next_streak_day", 0),
-                streak_bonus_days=data.get("streak_bonus_days", 0),
-                streak_bonus_credit=data.get("streak_bonus_credit", 0),
-                week_checkin_days=data.get("week_checkin_days", 0),
-                week_progress=data.get("week_progress", [False]*7),
-                total_credits=data.get("total_credits", 0),
-                activity_name=data.get("activity_name", ""),
+            today_checked_in=bool(
+                data.get("today_checked_in", data.get("todayCheckedIn", False))
+            ),
+            streak_days=int(data.get("streak_days", data.get("streakDays", 0)) or 0),
+            daily_credit=int(data.get("daily_credit", data.get("dailyCredit", 0)) or 0),
+            today_credit=int(data.get("today_credit", data.get("todayCredit", 0)) or 0),
+            is_streak_day=bool(data.get("is_streak_day", data.get("isStreakDay", False))),
+            next_streak_day=int(data.get("next_streak_day", data.get("nextStreakDay", 0)) or 0),
+            streak_bonus_days=int(data.get("streak_bonus_days", data.get("streakBonusDays", 0)) or 0),
+            streak_bonus_credit=int(data.get("streak_bonus_credit", data.get("streakBonusCredit", 0)) or 0),
+            week_checkin_days=int(data.get("week_checkin_days", data.get("weekCheckinDays", 0)) or 0),
+            week_progress=data.get("week_progress", data.get("weekProgress", [False] * 7)),
+            total_credits=int(data.get("total_credits", data.get("totalCredits", 0)) or 0),
+            activity_name=data.get("activity_name", data.get("activityName", "")) or "",
             )
             return {"success": True, "data": status}
         except Exception as e:

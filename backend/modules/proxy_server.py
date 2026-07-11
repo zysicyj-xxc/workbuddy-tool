@@ -29,7 +29,11 @@ from urllib.parse import urlparse
 
 import requests
 
+from utils.network import get_outbound_proxies, get_ssl_verify
+
 logger = logging.getLogger(__name__)
+
+SSL_VERIFY = get_ssl_verify()
 
 # ─── 上游代理地址（加密隐藏，用户在UI上看不到）───
 _OBFUSCATED_PROXY = base64.b64encode(
@@ -927,6 +931,22 @@ class ProxyDatabase:
         """立即刷盘（用于程序退出前调用）"""
         self._flush_to_disk()
 
+    def clear_all(self, *, keep_settings: bool = False):
+        """清空代理数据（上游 Key / 子 Key / 日志统计）；可选保留 settings。"""
+        with self._lock:
+            settings = dict(self._data.get("settings") or {}) if keep_settings else {"upstream_proxy": ""}
+            self._data = {
+                "upstream_keys": [],
+                "sub_api_keys": [],
+                "request_logs": [],
+                "daily_stats": {},
+                "settings": settings,
+            }
+            self._key_status_version += 1
+            self._sub_key_version += 1
+            self._dirty = True
+        self._flush_to_disk()
+
     # === 上游 Key 管理 ===
 
     def get_upstream_keys(self) -> list[dict]:
@@ -1409,7 +1429,7 @@ class ProxyDatabase:
                 resp = requests.post(url, json={}, headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
-                }, timeout=10)
+                }, timeout=10, verify=SSL_VERIFY, proxies=get_outbound_proxies())
                 if resp.status_code == 200:
                     data = resp.json()
                     # 兼容两种响应结构：
@@ -1610,12 +1630,12 @@ class ProxyRouter:
                 )
                 session.mount("https://", adapter)
                 session.mount("http://", adapter)
-                # 重要：绕过系统代理（Clash/V2Ray），直连上游 copilot.tencent.com
-                # 否则请求会经过 Clash 再转发，可能造成 400 环路错误
+                # 绕过系统代理；集群环境走 OUTBOUND_PROXY（gost）
                 session.trust_env = False
-                session.proxies = {"http": None, "https": None}
+                session.proxies = get_outbound_proxies()
+                session.verify = SSL_VERIFY
                 self._sessions[domain] = session
-                logger.info(f"创建上游连接池: {domain}")
+                logger.info(f"创建上游连接池: {domain} proxy={session.proxies} verify={SSL_VERIFY}")
             return self._sessions[domain]
 
     def select_key(self, model: str, allowed_key_ids: list = None, exclude: set = None,
@@ -1974,7 +1994,8 @@ class ProxyRouter:
                             json=test_data,
                             headers=_build_workbuddy_relay_headers(api_key),
                             timeout=15,
-                            proxies={"http": None, "https": None},
+                            proxies=get_outbound_proxies(),
+                            verify=SSL_VERIFY,
                         )
                         if resp.status_code in (200, 400):
                             # 200=正常 400=参数问题但Key有效 → 恢复为 active

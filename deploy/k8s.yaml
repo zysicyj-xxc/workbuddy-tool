@@ -1,4 +1,4 @@
-apiVersion: v1
+﻿apiVersion: v1
 kind: Namespace
 metadata:
   name: workbuddy
@@ -14,6 +14,16 @@ spec:
   resources:
     requests:
       storage: 1Gi
+# workbuddy-db-conf Secret 需单独创建（凭据不入库）：
+#   kubectl create secret generic workbuddy-db-conf -n workbuddy \
+#     --from-literal=DB_CONF='{"host":"...","port":3306,"user":"...","passwd":"...","database":"workbuddy","charset":"utf8mb4"}' \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# workbuddy-basic-auth Secret 需单独创建（凭据不入库）：
+#   kubectl create secret generic workbuddy-basic-auth -n workbuddy \
+#     --from-literal=BASIC_AUTH_USER=admin \
+#     --from-literal=BASIC_AUTH_PASSWORD='CHANGE_ME' \
+#     --dry-run=client -o yaml | kubectl apply -f -
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,13 +49,24 @@ spec:
     spec:
       imagePullSecrets:
         - name: ccr-registry
+      # 可选：固定到指定节点 / 污点（按集群填写，勿提交真实主机名）
+      # nodeSelector:
+      #   kubernetes.io/hostname: your-node-name
+      # tolerations:
+      #   - key: "dedicated"
+      #     operator: "Equal"
+      #     value: "high-bandwidth"
+      #     effect: "NoSchedule"
       containers:
         - name: workbuddy-tool
-          image: ccr.ccs.tencentyun.com/zysicyj/storehouse1:workbuddy-tool-latest
+          # 按自己的镜像仓库修改
+          image: your-registry.example.com/your-namespace/workbuddy-tool:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
+            - containerPort: 8002
+              name: proxy
           resources:
             requests:
               cpu: 100m
@@ -55,7 +76,7 @@ spec:
               memory: 768Mi
           livenessProbe:
             httpGet:
-              path: /api/dashboard
+              path: /api/health
               port: 8000
             initialDelaySeconds: 30
             periodSeconds: 30
@@ -63,12 +84,33 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/dashboard
+              path: /api/health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          env:
+            - name: DB_CONF
+              valueFrom:
+                secretKeyRef:
+                  name: workbuddy-db-conf
+                  key: DB_CONF
+            - name: BASIC_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: workbuddy-basic-auth
+                  key: BASIC_AUTH_USER
+            - name: BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: workbuddy-basic-auth
+                  key: BASIC_AUTH_PASSWORD
+            # 出站 TLS / 代理按环境按需配置（勿写入真实内网地址）
+            - name: HTTP_SSL_VERIFY
+              value: "true"
+            - name: OUTBOUND_PROXY
+              value: ""
           volumeMounts:
             - name: data
               mountPath: /root/.workbuddy-tool
@@ -91,6 +133,10 @@ spec:
       port: 8000
       targetPort: 8000
       protocol: TCP
+    - name: proxy
+      port: 8002
+      targetPort: 8002
+      protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -103,7 +149,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: workbuddy.zysicyj.top
+    - host: workbuddy.example.com
       http:
         paths:
           - path: /
@@ -115,5 +161,5 @@ spec:
                   number: 8000
   tls:
     - hosts:
-        - workbuddy.zysicyj.top
-      secretName: zysicyj-tls
+        - workbuddy.example.com
+      secretName: workbuddy-tls

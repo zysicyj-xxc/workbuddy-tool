@@ -14,6 +14,7 @@ import { accountsApi, checkinApi, quotaApi } from '../api'
 
 const loading = ref(false)
 const accounts = ref([])
+const checkingUid = ref('')
 
 // 状态标签映射（color 用 Arco 预设颜色名，保证浅色模式下文字清晰）
 const statusMap = {
@@ -59,25 +60,33 @@ function formatInt(v) {
 }
 
 // 计算剩余积分百分比（用于进度条）
+/** Arco Progress 的 percent 为 0–1 */
 function quotaPercentage(row) {
   const total = formatInt(row.quota?.credits_total)
   const remaining = formatInt(row.quota?.credits_remaining)
   if (total <= 0) return 0
-  return Math.round((remaining / total) * 100)
+  return remaining / total
 }
 
-// 进度条颜色
+// 进度条颜色（入参为 0–100）
 function quotaColor(percentage) {
   if (percentage > 50) return '#00b42a'
   if (percentage > 20) return '#ff7d00'
   return '#f53f3f'
 }
 
-// 今日是否已签到
+// 今日是否已签到（优先用后端 checked_today）
 function isCheckedToday(row) {
+  if (typeof row.checkin?.checked_today === 'boolean') {
+    return row.checkin.checked_today
+  }
   const last = row.checkin?.last_checkin_time
   if (!last) return false
-  return new Date(last).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
+  const d = new Date(last)
+  const now = new Date()
+  return d.getFullYear() === now.getFullYear() &&
+         d.getMonth() === now.getMonth() &&
+         d.getDate() === now.getDate()
 }
 
 // 加载账号列表
@@ -151,19 +160,31 @@ async function refreshAllQuota() {
   loading.value = true
   try {
     const res = await quotaApi.refresh()
-    Message.success(`刷新完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
-    // 合并刷新结果到本地列表
+    if (res.failed === 0) {
+      Message.success(`刷新完成：成功 ${res.success} 个`)
+    } else if (res.success === 0) {
+      Message.error(`刷新失败：${res.failed} 个账号全部失败`)
+    } else {
+      Message.warning(`刷新完成：成功 ${res.success} 个，失败 ${res.failed} 个`)
+    }
+    // 合并刷新结果到本地列表（含签到状态）
     if (res?.details?.length) {
       const detailMap = new Map(res.details.map((d) => [d.uid, d]))
       accounts.value = accounts.value.map((a) => {
         const d = detailMap.get(a.uid)
-        if (!d || !a.quota) return a
+        if (!d || d.status !== 'success') return a
         return {
           ...a,
           quota: {
             ...a.quota,
-            credits_remaining: d.remaining ?? a.quota.credits_remaining,
-            credits_total: d.total ?? a.quota.credits_total,
+            credits_remaining: d.remaining ?? a.quota?.credits_remaining,
+            credits_total: d.total ?? a.quota?.credits_total,
+          },
+          checkin: {
+            ...a.checkin,
+            checked_today: d.checked_today ?? a.checkin?.checked_today,
+            last_checkin_time: d.last_checkin_time ?? a.checkin?.last_checkin_time,
+            streak_days: d.streak_days ?? a.checkin?.streak_days,
           },
         }
       })
@@ -193,12 +214,22 @@ function removeAccount(row) {
 
 // 单账号签到
 async function checkinAccount(row) {
+  if (checkingUid.value) return
+  checkingUid.value = row.uid
   try {
-    await checkinApi.checkin(row.uid)
-    Message.success(`账号「${row.nickname}」签到成功`)
-    loadAccounts()
+    const res = await checkinApi.checkin(row.uid)
+    if (res.already) {
+      Message.info(`账号「${row.nickname}」今日已签到`)
+    } else if (res.success) {
+      Message.success(`账号「${row.nickname}」签到成功`)
+    } else {
+      Message.warning(res.error || '签到失败')
+    }
+    await loadAccounts()
   } catch (e) {
     // 错误已由拦截器提示
+  } finally {
+    checkingUid.value = ''
   }
 }
 
@@ -279,7 +310,7 @@ onMounted(loadAccounts)
                   </div>
                   <a-progress
                     :percent="quotaPercentage(record)"
-                    :color="quotaColor(quotaPercentage(record))"
+                    :color="quotaColor(quotaPercentage(record) * 100)"
                     size="mini"
                     :show-text="false"
                   />
@@ -313,6 +344,8 @@ onMounted(loadAccounts)
                     size="small"
                     type="text"
                     status="primary"
+                    :loading="checkingUid === record.uid"
+                    :disabled="!!checkingUid && checkingUid !== record.uid"
                     @click="checkinAccount(record)"
                   >
                     <template #icon><IconCheck /></template>
@@ -427,7 +460,7 @@ onMounted(loadAccounts)
                 <a-table-column title="使用进度" :min-width="180">
                   <template #cell="{ record }">
                     <a-progress
-                      :percent="record.usage_percentage"
+                      :percent="(record.usage_percentage || 0) / 100"
                       :color="quotaColor(record.remain_percentage)"
                       size="small"
                     />

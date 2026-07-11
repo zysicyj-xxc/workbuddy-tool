@@ -18,13 +18,17 @@ venv/
 frontend/dist/
 build/
 
-# 运行时数据
+# 运行时数据与密钥
 *.db
 *.enc
 data.enc
 proxy_db.json
 logs/
 .workbuddy-tool/
+.env
+backend/.db_conf.json
+backend/.docker.env
+backups/
 
 # 测试文件
 test_*.py

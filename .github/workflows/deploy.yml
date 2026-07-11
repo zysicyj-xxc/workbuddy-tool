@@ -1,8 +1,16 @@
+# 可选：自托管 Runner 构建推送并部署。
+# 凭据仅通过 GitHub Secrets / 集群 Secret 注入，仓库内不含密码。
+# 开源仓库默认仅允许手动触发，避免 fork/PR 误部署。
+#
+# 建议配置（Repository variables / secrets）：
+#   vars.CCR              镜像仓库前缀，如 registry.example.com/namespace
+#   vars.DEPLOY_HOST      Ingress 域名
+#   vars.KUBECONFIG_FILE  Runner 本机 kubeconfig 路径
+#   secrets.CCR_USERNAME / secrets.CCR_PASSWORD
+
 name: Build and Deploy WorkBuddy-Tool
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -10,15 +18,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CCR: ccr.ccs.tencentyun.com/zysicyj/storehouse1
-  KUBECONFIG_FILE: c:\code\.kube\config
+  CCR: ${{ vars.CCR || 'your-registry.example.com/your-namespace' }}
+  KUBECONFIG_FILE: ${{ vars.KUBECONFIG_FILE || 'C:\path\to\.kube\config' }}
   DOCKER_BUILDKIT: "1"
   DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
   KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
   NAMESPACE: workbuddy
   DEPLOY_NAME: workbuddy-tool
   IMAGE_NAME: workbuddy-tool
-  HOST: workbuddy.zysicyj.top
+  HOST: ${{ vars.DEPLOY_HOST || 'workbuddy.example.com' }}
 
 jobs:
   build-and-deploy:
@@ -36,7 +44,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "IMAGE_TAG=$tag"
           Write-Host "Image tag: $tag"
 
-      - name: Login to Tencent CCR
+      - name: Login to container registry
         run: |
           & $env:DOCKER_EXE login $env:CCR -u ${{ secrets.CCR_USERNAME }} -p ${{ secrets.CCR_PASSWORD }}
 
@@ -55,7 +63,7 @@ jobs:
           $k = $env:KUBECTL_EXE
           $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
           & $k $kc create namespace $env:NAMESPACE --dry-run=client -o yaml | & $k $kc apply -f -
-          foreach ($s in @('ccr-registry','zysicyj-tls')) {
+          foreach ($s in @('ccr-registry','workbuddy-tls')) {
             $exists = & $k $kc get secret $s -n $env:NAMESPACE --ignore-not-found -o name 2>$null
             if ($exists) {
               Write-Host "Secret $s already exists in $($env:NAMESPACE), skip"
@@ -81,31 +89,7 @@ jobs:
         run: |
           $k = $env:KUBECTL_EXE
           $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
-          & $k $kc set image deploy/$env:DEPLOY_NAME $env:DEPLOY_NAME="$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)" -n $env:NAMESPACE
-          & $k $kc rollout status deploy/$env:DEPLOY_NAME -n $env:NAMESPACE --timeout=300s
-
-      - name: Verify browser access
-        run: |
-          [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-          $ok = $false
-          for ($i = 1; $i -le 12; $i++) {
-            try {
-              $resp = Invoke-WebRequest -Uri "https://$($env:HOST)" -UseBasicParsing -TimeoutSec 15
-              Write-Host "Attempt ${i}: HTTP $($resp.StatusCode)"
-              if ($resp.StatusCode -eq 200) { $ok = $true; break }
-            } catch {
-              Write-Host "Attempt ${i}: $($_.Exception.Message)"
-            }
-            Start-Sleep -Seconds 10
-          }
-          if (-not $ok) { throw "Browser access verification failed" }
-          Write-Host "Browser access OK: https://$($env:HOST) returns 200"
-
-      - name: Show rollout status
-        if: always()
-        run: |
-          $k = $env:KUBECTL_EXE
-          $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
-          & $k $kc get pods -n $env:NAMESPACE -o wide
-          & $k $kc get ingress -n $env:NAMESPACE
-          & $k $kc get events -n $env:NAMESPACE --sort-by='.lastTimestamp' --field-selector type!=Normal
+          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          & $k $kc -n $env:NAMESPACE set image deployment/$env:DEPLOY_NAME workbuddy-tool=$tagged
+          & $k $kc -n $env:NAMESPACE rollout status deployment/$env:DEPLOY_NAME --timeout=180s
+          & $k $kc -n $env:NAMESPACE get pods -o wide

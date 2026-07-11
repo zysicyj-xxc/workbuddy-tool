@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from models import Account, Platform, AccountStatus, PlanType, CheckinInfo, QuotaInfo
 from utils.store import load_accounts, save_account, delete_account, load_setting
+from utils.network import get_outbound_proxy
 from modules.api_client import ApiClient
 
 router = APIRouter()
@@ -50,6 +51,7 @@ def _account_to_dict(account: Account) -> dict:
             "streak_days": account.checkin.streak_days,
             "daily_credit": account.checkin.daily_credit,
             "total_credits": account.checkin.total_credits,
+            "checked_today": bool(account.checkin.checked_today),
         },
         "quota": {
             "credits_remaining": account.quota.credits_remaining,
@@ -81,7 +83,7 @@ def add_account(req: AddAccountRequest):
         raise HTTPException(400, "API Key 必须以 ck_ 开头")
 
     # 用 API Key 调用上游获取账号信息
-    client = ApiClient.from_api_key(api_key)
+    client = ApiClient.from_api_key(api_key, proxy=get_outbound_proxy())
     result = client.get_user_resource()
 
     if not result.get("success"):
@@ -118,6 +120,12 @@ def add_account(req: AddAccountRequest):
         created_at=datetime.now(),
         last_used=datetime.now(),
     )
+    # 写入资源包缓存，供资源包管理页直接读 MySQL
+    try:
+        from api.quota import _pkg_to_dict
+        account.quota.packages = [_pkg_to_dict(p) for p in result.get("packages", [])]
+    except Exception:
+        pass
 
     save_account(account)
     logger.info(f"添加账号成功: {account.nickname}")

@@ -18,6 +18,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # 安装 Python 依赖（使用预编译 wheel，不需要 gcc）
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --only-binary :all: --no-cache-dir -r /app/backend/requirements.txt
@@ -36,7 +40,7 @@ WORKDIR /app/backend
 RUN mkdir -p /root/.workbuddy-tool
 VOLUME /root/.workbuddy-tool
 
-EXPOSE 8000
+EXPOSE 8000 8002
 
 # uvicorn 启动 main:app，监听 0.0.0.0:8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

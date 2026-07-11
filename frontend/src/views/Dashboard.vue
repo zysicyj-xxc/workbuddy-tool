@@ -43,8 +43,8 @@ const quotaSummary = computed(() => {
   let total = 0
   let remaining = 0
   accounts.value.forEach((a) => {
-    total += a.quota?.credits_total || 0
-    remaining += a.quota?.credits_remaining || 0
+    total += Math.round(Number(a.quota?.credits_total) || 0)
+    remaining += Math.round(Number(a.quota?.credits_remaining) || 0)
   })
   const percentage = total > 0 ? Math.round((remaining / total) * 100) : 0
   return { total, remaining, percentage }

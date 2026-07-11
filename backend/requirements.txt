@@ -3,3 +3,5 @@ uvicorn[standard]==0.30.0
 requests==2.34.2
 cryptography==48.0.0
 python-multipart==0.0.20
+pymysql==1.1.1
+dbutils==3.0.0

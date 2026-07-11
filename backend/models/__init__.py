@@ -163,6 +163,7 @@ class Account:
     quota: QuotaInfo = field(default_factory=QuotaInfo)
     created_at: Optional[datetime] = None
     last_used: Optional[datetime] = None
+    account_group: str = ""
 
     @property
     def display_name(self) -> str:

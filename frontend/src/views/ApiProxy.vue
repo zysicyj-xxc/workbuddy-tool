@@ -599,7 +599,7 @@ onMounted(() => {
             </a-table-column>
             <a-table-column title="剩余/总积分" :width="140">
               <template #cell="{ record }">
-                {{ record.quota?.credits_remaining || 0 }} / {{ record.quota?.credits_total || 0 }}
+                {{ Math.round(Number(record.quota?.credits_remaining) || 0) }} / {{ Math.round(Number(record.quota?.credits_total) || 0) }}
               </template>
             </a-table-column>
             <a-table-column title="状态" :width="90">

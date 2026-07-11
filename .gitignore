@@ -7,22 +7,50 @@ __pycache__/
 .venv/
 venv/
 
-# 敏感数据（用户数据、密钥）
+# 环境与密钥（开源必忽略）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secret.key
+.db_conf.json
+backend/.db_conf.json
+backend/.docker.env
+**/credentials*.json
+
+# 敏感数据（用户数据、导出包、备份）
 *.enc
 *.db
+*.sql.gz
 data.enc
 proxy_db.json
+proxy_db.json.tmp
 logs/
 .workbuddy-tool/
+data/
+backups/
+*.dump
+*.sql.bak
 
-# 测试产物
+# 测试产物 / 本地验证垃圾
 test-screenshots/
 screenshot_*.png
+test-export.enc
+test-old-data.db
+create_test_db.py
+test_persist_settings.py
+test_verify*.py
 
 # 构建
 dist/
 build/
 
-# 编辑器
+# 编辑器 / IDE / 插件会话
 .vscode/
 .idea/
+.cursor/
+.zcode/
+
+# Added by hindsight-cursor plugin — session rules are regenerated each session.
+/.cursor\rules\hindsight-session.mdc

@@ -103,18 +103,11 @@ function usageColor(percentage) {
   return '#f53f3f'
 }
 
-// 5 分钟内不重复请求后端（避免频繁刷新卡顿）
-const CACHE_TTL = 5 * 60 * 1000
-let lastLoadTs = 0
-
 async function loadPackages(force = false) {
-  if (!force && Date.now() - lastLoadTs < CACHE_TTL && packages.value.length) {
-    return
-  }
   loading.value = true
   try {
-    packages.value = (await quotaApi.getAllPackages()) || []
-    lastLoadTs = Date.now()
+    // 默认读 MySQL 缓存（快）；force=true 打上游刷新并写回
+    packages.value = (await quotaApi.getAllPackages(force)) || []
   } catch (e) {
     // 错误已由拦截器提示
   } finally {
@@ -122,7 +115,7 @@ async function loadPackages(force = false) {
   }
 }
 
-// 强制刷新（绕过缓存）
+// 强制刷新（打上游）
 function forceRefresh() {
   loadPackages(true)
 }
@@ -202,7 +195,7 @@ onMounted(loadPackages)
         <template #title>
           <span>资源包列表</span>
           <span class="text-secondary" style="font-weight: normal; margin-left: 8px">
-            （按到期时间升序，汇总自所有账号）
+            （按到期时间升序 · 默认读本地缓存，点刷新同步上游）
           </span>
         </template>
         <template #extra>
@@ -255,7 +248,7 @@ onMounted(loadPackages)
             <a-table-column title="使用进度" :min-width="180">
               <template #cell="{ record }">
                 <a-progress
-                  :percent="record.usage_percentage"
+                  :percent="(record.usage_percentage || 0) / 100"
                   :color="usageColor(record.usage_percentage)"
                   size="small"
                 />
@@ -286,7 +279,7 @@ onMounted(loadPackages)
 
         <a-empty
           v-if="!loading && !filteredPackages.length"
-          :description="packages.length ? '没有符合条件的资源包' : '暂无资源包数据（资源包来自账号管理的每个账号实时查询）'"
+          :description="packages.length ? '没有符合条件的资源包' : '暂无资源包数据（点刷新从上游同步，平时读本地缓存）'"
           style="padding: 24px"
         />
       </a-card>
