@@ -129,8 +129,11 @@ jobs:
           if (-not $appVersion) {
             $pkgPath = Join-Path $PWD 'frontend/package.json'
             if (Test-Path -LiteralPath $pkgPath) {
-              $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json
-              if ($pkg.version -match '^\d+\.\d+\.\d+') { $appVersion = $pkg.version }
+              # 用正则取 version，避免 PowerShell 默认编码解析含中文的 JSON 失败
+              $raw = [System.IO.File]::ReadAllText($pkgPath)
+              if ($raw -match '"version"\s*:\s*"(\d+\.\d+\.\d+)"') {
+                $appVersion = $Matches[1]
+              }
             }
           }
           if (-not $appVersion) { $appVersion = '1.0.0' }
