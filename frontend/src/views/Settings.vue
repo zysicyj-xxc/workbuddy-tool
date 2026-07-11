@@ -211,7 +211,7 @@ function handleClearClick() {
           </template>
         </a-upload>
         <div class="text-secondary">
-          可直接选 <code>C:\Users\zysic\.antigravity-tools\antigravity.db</code>
+          可选本地 <code>~/.antigravity-tools/antigravity.db</code>
         </div>
       </a-form-item>
 

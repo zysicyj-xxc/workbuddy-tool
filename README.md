@@ -1,6 +1,50 @@
 # workbuddy-tool
 
-腾讯 CodeBuddy / WorkBuddy 账号管理、签到、资源包与本地 API 代理。账号与设置持久化在 **MySQL**；代理 Key 落在本地数据卷。
+腾讯 **CodeBuddy / WorkBuddy** 多账号管理面板：签到、资源包、积分看板，以及本地 **OpenAI 兼容 API 代理**。
+
+账号与设置持久化在 **MySQL**；代理 Key 落在本地数据卷。管理端 Vue 3 + Arco Design，后端 FastAPI。
+
+## 功能预览
+
+### 仪表盘
+
+账号状态、签到进度、积分总览与近 7 日用量统计。
+
+![仪表盘](docs/screenshots/dashboard.png)
+
+### 账号管理
+
+批量导入 `ck_` API Key，查看剩余积分、签到状态，支持单账号签到与刷新。
+
+![账号管理](docs/screenshots/accounts.png)
+
+### 每日签到
+
+批量签到、可配置定时签到（下次执行时间热更新）、连续天数与积分记录。
+
+![每日签到](docs/screenshots/checkin.png)
+
+### 资源包管理
+
+按账号汇总资源包有效/过期状态、剩余容量与到期提醒（MySQL 缓存，避免反复打上游）。
+
+![资源包管理](docs/screenshots/packages.png)
+
+### API 代理
+
+本地统一入口（默认 `:8002`），从账号池调度上游 Key；支持子 Key、模型列表。
+
+![API 代理](docs/screenshots/api-proxy.png)
+
+### 日志
+
+按日浏览代理请求日志，支持实时刷新与结构化字段查看。
+
+![日志](docs/screenshots/logs.png)
+
+### 数据管理
+
+MySQL 导入/导出加密数据包（WBDP）、旧版 SQLite / `data.enc` 迁移、一键清空。详见下方「数据包格式」与迁移脚本。
 
 ## 快速开始（空库 + 导入数据包）
 
@@ -52,6 +96,12 @@ python scripts/package_cli.py import -i ./your-backup.enc
 
 导出内容：MySQL `accounts` + `settings` + 代理 upstream/sub keys。
 
+旧版桌面端目录 `~/.antigravity-tools` 可迁移：
+
+```bash
+python scripts/migrate_legacy_data.py --import-http --replace
+```
+
 ## 常用脚本
 
 | 脚本 | 作用 |
@@ -60,6 +110,7 @@ python scripts/package_cli.py import -i ./your-backup.enc
 | `scripts/export_package.sh` | HTTP 导出 `.enc` |
 | `scripts/import_package.sh` | HTTP 导入 `.enc` |
 | `scripts/package_cli.py` | 不经 HTTP，直连 MySQL 导出/导入 |
+| `scripts/migrate_legacy_data.py` | 旧版 `data.enc` / SQLite → MySQL |
 | `scripts/mysql_dump.sh` / `mysql_restore.sh` | 可选原生 SQL 备份 |
 
 ## 开发（不用 Docker 跑前端）
@@ -79,8 +130,8 @@ cd frontend && npm ci && npm run dev
 
 ## K8s
 
-见 `deploy/k8s.yaml`。`workbuddy-db-conf` / `workbuddy-basic-auth` 需集群内单独创建 Secret，清单内不含明文密码。
+见 `deploy/k8s.yaml`（镜像 / 域名已换成占位符）。`workbuddy-db-conf` / `workbuddy-basic-auth` 需集群内单独创建 Secret，清单内不含明文密码。CI 默认仅 `workflow_dispatch`，凭据走 GitHub Secrets / Variables。
 
 ## License
 
-按仓库 LICENSE 为准；开源前请自查无账号 Token、API Key、数据库地址进入 Git 历史。
+按仓库 LICENSE 为准；贡献或 fork 前请自查无账号 Token、API Key、数据库地址进入 Git 历史。
