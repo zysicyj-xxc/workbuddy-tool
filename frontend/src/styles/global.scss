@@ -6,6 +6,9 @@ body,
   margin: 0;
   padding: 0;
   height: 100%;
+  // 必须用不透明背景色：暗色模式下 --color-fill-* 是半透明，透出浏览器默认白底会「大片发白」
+  background-color: var(--color-bg-1);
+  color: var(--color-text-1);
   font-family: 'Google Sans', 'Inter', 'Helvetica Neue', Helvetica,
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
 }
@@ -84,4 +87,10 @@ pre,
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+// 暗色主题兜底：部分 Arco 组件仍引用近白的 --color-bg-white
+body[arco-theme='dark'] {
+  --color-bg-white: var(--color-bg-2);
+  --color-spin-layer-bg: rgba(23, 23, 26, 0.6);
 }

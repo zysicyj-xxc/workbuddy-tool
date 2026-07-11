@@ -9,12 +9,20 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-      // 首屏同步系统/本地主题，避免白闪
+      // 首屏同步系统/本地主题，避免白闪；同时给 html 上不透明底色
       (function () {
         try {
           var saved = localStorage.getItem('workbuddy-theme') || localStorage.getItem('antigravity-theme')
           var dark = saved === 'dark' || ((!saved || saved === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches)
-          if (dark) document.documentElement.setAttribute('arco-theme', 'dark')
+          var root = document.documentElement
+          if (dark) {
+            root.setAttribute('arco-theme', 'dark')
+            root.style.backgroundColor = '#17171a'
+            root.style.colorScheme = 'dark'
+          } else {
+            root.style.backgroundColor = '#fff'
+            root.style.colorScheme = 'light'
+          }
         } catch (e) {}
       })()
     </script>

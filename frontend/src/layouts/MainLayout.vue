@@ -361,6 +361,7 @@ onBeforeUnmount(() => {
 <style lang="scss" scoped>
 .layout-root {
   height: 100%;
+  background-color: var(--color-bg-1);
 }
 
 .layout-sider {
@@ -441,14 +442,14 @@ onBeforeUnmount(() => {
 }
 
 .layout-body {
-  background-color: var(--color-fill-1);
+  background-color: var(--color-bg-1);
 }
 
 .layout-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background-color: var(--color-bg-1);
+  background-color: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-2);
   padding: 0 16px;
   height: 56px;
@@ -480,6 +481,7 @@ onBeforeUnmount(() => {
 .layout-content {
   padding: 16px;
   min-height: 0;
+  background-color: var(--color-bg-1);
 }
 
 // 全局搜索弹窗样式

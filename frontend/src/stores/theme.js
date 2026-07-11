@@ -14,9 +14,13 @@ function applyDark(val) {
   if (val) {
     el.setAttribute('arco-theme', 'dark')
     root.setAttribute('arco-theme', 'dark')
+    root.style.colorScheme = 'dark'
+    root.style.backgroundColor = '#17171a'
   } else {
     el.removeAttribute('arco-theme')
     root.removeAttribute('arco-theme')
+    root.style.colorScheme = 'light'
+    root.style.backgroundColor = '#fff'
   }
 }
 
