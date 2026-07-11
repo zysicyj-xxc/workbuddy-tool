@@ -134,7 +134,13 @@ jobs:
 
       - name: Login to container registry
         run: |
-          & $env:DOCKER_EXE login $env:CCR -u ${{ secrets.CCR_USERNAME }} -p ${{ secrets.CCR_PASSWORD }}
+          # CCR 变量是「仓库前缀」如 ccr.../ns/repo，login 只需 registry host
+          $registry = ($env:CCR -split '/')[0]
+          Write-Host "docker login $registry"
+          $pass = '${{ secrets.CCR_PASSWORD }}'
+          $user = '${{ secrets.CCR_USERNAME }}'
+          $pass | & $env:DOCKER_EXE login $registry -u $user --password-stdin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and push image
         run: |
