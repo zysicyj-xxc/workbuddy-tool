@@ -23,8 +23,8 @@ import { useThemeStore } from '../stores/theme'
 const route = useRoute()
 const router = useRouter()
 const theme = useThemeStore()
-// 解构 isDark 为顶层 ref，避免模板中 ref 对象不自动解包导致切换失效
-const { isDark } = theme
+// 解构 isDark / mode 为顶层 ref，避免模板中 ref 对象不自动解包导致切换失效
+const { isDark, mode: themeMode } = theme
 
 // 菜单项配置
 const menuItems = [
@@ -269,7 +269,12 @@ onBeforeUnmount(() => {
               <template #icon><IconNotification /></template>
             </a-button>
           </a-badge>
-          <a-button type="text" class="header-action" @click="theme.toggle()" title="切换主题">
+          <a-button
+            type="text"
+            class="header-action"
+            @click="theme.toggle()"
+            :title="themeMode === 'system' ? '跟随系统（点击切换）' : (isDark ? '深色（点击切换浅色）' : '浅色（点击切换深色）')"
+          >
             <template #icon>
               <IconMoon v-if="!isDark" />
               <IconSun v-else />
