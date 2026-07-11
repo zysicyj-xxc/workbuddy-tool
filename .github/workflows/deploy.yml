@@ -1,16 +1,27 @@
-# 可选：自托管 Runner 构建推送并部署。
-# 凭据仅通过 GitHub Secrets / 集群 Secret 注入，仓库内不含密码。
-# 开源仓库默认仅允许手动触发，避免 fork/PR 误部署。
+# 自托管 Runner（ZYS-V1）构建镜像 → 推送 CCR → 部署 k3s
+# 凭据仅通过 GitHub Secrets / Variables 注入，仓库内不含密码。
 #
-# 建议配置（Repository variables / secrets）：
-#   vars.CCR              镜像仓库前缀，如 registry.example.com/namespace
-#   vars.DEPLOY_HOST      Ingress 域名
-#   vars.KUBECONFIG_FILE  Runner 本机 kubeconfig 路径
+# Runner 要求：组织 Runner「ZYS-V1」需添加自定义标签 ZYS-V1
+#   GitHub → zysicyj-xxc → Settings → Actions → Runners → ZYS-V1 → Labels
+#
+# 建议配置（优先用组织 Variables，仓库级可覆盖）：
+#   vars.CCR              镜像仓库前缀，如 ccr.ccs.tencentyun.com/zysicyj/storehouse1
+#   vars.DEPLOY_HOST      Ingress 域名，如 workbuddy.zysicyj.top
+#   vars.KUBECONFIG_FILE  Runner 本机 kubeconfig（须指向 master 公网 6443，
+#                         默认 C:\code\.kube\config.public → https://119.45.242.45:6443）
 #   secrets.CCR_USERNAME / secrets.CCR_PASSWORD
 
 name: Build and Deploy WorkBuddy-Tool
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'Dockerfile'
+      - 'deploy/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +30,7 @@ concurrency:
 
 env:
   CCR: ${{ vars.CCR || 'your-registry.example.com/your-namespace' }}
-  KUBECONFIG_FILE: ${{ vars.KUBECONFIG_FILE || 'C:\path\to\.kube\config' }}
+  KUBECONFIG_FILE: ${{ vars.KUBECONFIG_FILE || 'C:\code\.kube\config.public' }}
   DOCKER_BUILDKIT: "1"
   DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
   KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
@@ -30,7 +41,8 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: [self-hosted, Windows]
+    if: github.repository == 'zysicyj-xxc/workbuddy-tool'
+    runs-on: [self-hosted, ZYS-V1]
     defaults:
       run:
         shell: powershell -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -58,6 +70,18 @@ jobs:
           Write-Host "Pushed: $tagged"
           Write-Host "Pushed: $latest"
 
+      - name: Render K8s manifests
+        run: |
+          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          $manifest = Get-Content deploy/k8s.yaml -Raw
+          $manifest = $manifest.Replace(
+            'your-registry.example.com/your-namespace/workbuddy-tool:latest',
+            $tagged
+          )
+          $manifest = $manifest.Replace('workbuddy.example.com', $env:HOST)
+          Set-Content -Path deploy/k8s.rendered.yaml -Value $manifest -Encoding utf8
+          Write-Host "Rendered image=$tagged host=$($env:HOST)"
+
       - name: Ensure namespace and secrets
         run: |
           $k = $env:KUBECTL_EXE
@@ -83,7 +107,7 @@ jobs:
         run: |
           $k = $env:KUBECTL_EXE
           $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
-          & $k $kc apply -f deploy/k8s.yaml
+          & $k $kc apply -f deploy/k8s.rendered.yaml
 
       - name: Rollout deployment
         run: |
@@ -93,3 +117,22 @@ jobs:
           & $k $kc -n $env:NAMESPACE set image deployment/$env:DEPLOY_NAME workbuddy-tool=$tagged
           & $k $kc -n $env:NAMESPACE rollout status deployment/$env:DEPLOY_NAME --timeout=180s
           & $k $kc -n $env:NAMESPACE get pods -o wide
+
+      - name: Verify health
+        run: |
+          $url = "https://$($env:HOST)/api/health"
+          Write-Host "Checking $url"
+          for ($i = 1; $i -le 12; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
+              if ($resp.StatusCode -eq 200) {
+                Write-Host "Health OK: $($resp.StatusCode)"
+                exit 0
+              }
+            } catch {
+              Write-Host "Attempt $i/12 failed: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 10
+          }
+          Write-Error "Health check failed after rollout"
+          exit 1
