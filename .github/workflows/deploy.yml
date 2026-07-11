@@ -32,8 +32,6 @@ env:
   CCR: ${{ vars.CCR || 'your-registry.example.com/your-namespace' }}
   K3S_API_SERVER: ${{ vars.K3S_API_SERVER || 'https://119.45.242.45:6443' }}
   DOCKER_BUILDKIT: "1"
-  DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
-  KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
   NAMESPACE: workbuddy
   DEPLOY_NAME: workbuddy-tool
   IMAGE_NAME: workbuddy-tool
@@ -49,6 +47,47 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve docker and kubectl
+        run: |
+          function Find-Tool([string]$name, [string[]]$candidates) {
+            foreach ($p in $candidates) {
+              if ($p -and (Test-Path -LiteralPath $p)) { return (Resolve-Path -LiteralPath $p).Path }
+            }
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            return $null
+          }
+          Write-Host "hostname=$(hostname) user=$env:USERNAME pwd=$PWD"
+          Write-Host "PATH=$env:PATH"
+          $dockerCandidates = @(
+            $env:DOCKER_EXE,
+            'C:\Program Files\Docker\Docker\resources\bin\docker.exe',
+            'C:\ProgramData\chocolatey\bin\docker.exe'
+          )
+          $kubectlCandidates = @(
+            $env:KUBECTL_EXE,
+            'C:\Program Files\Docker\Docker\resources\bin\kubectl.exe',
+            'C:\ProgramData\chocolatey\bin\kubectl.exe',
+            'C:\kubectl\kubectl.exe',
+            (Join-Path $env:RUNNER_TEMP 'kubectl.exe')
+          )
+          $docker = Find-Tool 'docker.exe' $dockerCandidates
+          $kubectl = Find-Tool 'kubectl.exe' $kubectlCandidates
+          if (-not $kubectl) {
+            $ver = 'v1.32.2'
+            $out = Join-Path $env:RUNNER_TEMP 'kubectl.exe'
+            Write-Host "kubectl not found, downloading $ver -> $out"
+            Invoke-WebRequest -Uri "https://dl.k8s.io/release/$ver/bin/windows/amd64/kubectl.exe" -OutFile $out -UseBasicParsing
+            $kubectl = $out
+          }
+          if (-not $docker) { Write-Error 'docker.exe not found on runner PATH / common paths'; exit 1 }
+          Add-Content -Path $env:GITHUB_ENV -Value "DOCKER_EXE=$docker"
+          Add-Content -Path $env:GITHUB_ENV -Value "KUBECTL_EXE=$kubectl"
+          Write-Host "DOCKER_EXE=$docker"
+          Write-Host "KUBECTL_EXE=$kubectl"
+          & $docker version
+          & $kubectl version --client
 
       - name: Configure kubectl from token
         env:
