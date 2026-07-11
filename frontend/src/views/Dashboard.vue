@@ -57,13 +57,12 @@ const accountStatusText = computed(() => {
   return `活跃 ${a.active} · 已耗尽 ${a.exhausted} · 异常 ${a.error}`
 })
 
-// 缓存命中率百分比
-function cacheHitRatePercent(rate) {
-  if (rate == null) return '0%'
+// 缓存命中率（数值，供 a-statistic 展示）
+function cacheHitRateValue(rate) {
+  if (rate == null) return 0
   const num = Number(rate)
-  if (isNaN(num)) return '0%'
-  const percent = num <= 1 ? num * 100 : num
-  return `${Math.round(percent)}%`
+  if (isNaN(num)) return 0
+  return num <= 1 ? Math.round(num * 100) : Math.round(num)
 }
 
 // 加载使用统计
@@ -103,7 +102,7 @@ function renderClientChart() {
       formatter: (p) => {
         const item = data.find((d) => d.client === p.name)
         if (!item) return p.name
-        return `${p.name}<br/>请求数: ${item.requests}<br/>Token: ${item.total_tokens}`
+        return `${p.name}<br/>请求数: ${item.requests}<br/>总 Token: ${item.total_tokens}`
       },
     },
     legend: { type: 'scroll', bottom: 0, textStyle: { color: '#888' } },
@@ -152,7 +151,8 @@ function renderQuotaChart() {
   if (!quotaChart) {
     quotaChart = echarts.init(quotaChartRef.value)
   }
-  const used = quotaSummary.total - quotaSummary.remaining
+  const { total, remaining } = quotaSummary.value
+  const used = Math.max(0, total - remaining)
   quotaChart.setOption({
     tooltip: { trigger: 'item' },
     legend: { bottom: 0, textStyle: { color: '#888' } },
@@ -170,7 +170,7 @@ function renderQuotaChart() {
           fontWeight: 'bold',
         },
         data: [
-          { value: quotaSummary.remaining, name: '剩余', itemStyle: { color: '#00b42a' } },
+          { value: remaining, name: '剩余', itemStyle: { color: '#00b42a' } },
           { value: used, name: '已用', itemStyle: { color: '#f53f3f' } },
         ],
       },
@@ -317,7 +317,7 @@ onBeforeUnmount(() => {
               <div class="stat-content">
                 <div class="stat-title">总请求数</div>
                 <div class="stat-value">{{ dashboardData?.proxy.total_requests || 0 }}</div>
-                <div class="stat-desc">Prompt Tokens：{{ dashboardData?.proxy.total_prompt_tokens || 0 }}</div>
+                <div class="stat-desc">提示 Token：{{ dashboardData?.proxy.total_prompt_tokens || 0 }}</div>
               </div>
             </div>
           </a-card>
@@ -380,10 +380,10 @@ onBeforeUnmount(() => {
             <a-statistic title="总请求数" :value="stats?.total_requests || 0" />
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-statistic title="Prompt Tokens" :value="stats?.total_prompt_tokens || 0" />
+            <a-statistic title="提示 Token" :value="stats?.total_prompt_tokens || 0" />
           </a-col>
           <a-col :xs="12" :md="6">
-            <a-statistic title="Completion Tokens" :value="stats?.total_completion_tokens || 0" />
+            <a-statistic title="输出 Token" :value="stats?.total_completion_tokens || 0" />
           </a-col>
           <a-col :xs="12" :md="6">
             <a-statistic title="消耗积分" :value="stats?.total_credits || 0" :precision="0" />
@@ -392,12 +392,13 @@ onBeforeUnmount(() => {
         <a-divider :margin="16" />
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-statistic title="缓存命中Token" :value="stats?.cached_tokens || 0" />
+            <a-statistic title="缓存命中 Token" :value="stats?.cached_tokens || 0" />
           </a-col>
           <a-col :span="12">
             <a-statistic
               title="缓存命中率"
-              :value="cacheHitRatePercent(stats?.cache_hit_rate)"
+              :value="cacheHitRateValue(stats?.cache_hit_rate)"
+              suffix="%"
             />
           </a-col>
         </a-row>
@@ -427,10 +428,10 @@ onBeforeUnmount(() => {
               <template #columns>
                 <a-table-column title="客户端" data-index="client" :min-width="120" />
                 <a-table-column title="请求数" data-index="requests" :width="100" align="right" />
-                <a-table-column title="Prompt Tokens" :width="140" align="right">
+                <a-table-column title="提示 Token" :width="140" align="right">
                   <template #cell="{ record }">{{ record.prompt_tokens }}</template>
                 </a-table-column>
-                <a-table-column title="Total Tokens" :width="130" align="right">
+                <a-table-column title="总 Token" :width="130" align="right">
                   <template #cell="{ record }">{{ record.total_tokens }}</template>
                 </a-table-column>
               </template>
