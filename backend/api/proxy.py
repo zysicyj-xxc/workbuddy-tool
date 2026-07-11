@@ -32,8 +32,11 @@ def set_proxy_server(s: Optional[ProxyServer]):
 # ─── 请求模型 ───
 
 class AddUpstreamKeyRequest(BaseModel):
-    api_key: str
+    """添加上游 Key。优先传 uid（从账号表取凭证）；也可直接传 api_key。"""
+    api_key: str = ""
+    uid: str = ""  # 账号 uid：服务端取 api_key||auth_token + nickname
     nickname: str = ""
+    label: str = ""  # 兼容旧前端误传的 label，等同 nickname
     key_mode: int = 1  # 1=顺序, 2=随机, 3=负载均衡, 4=粘性会话
     allowed_models: list = []
     weight: int = 1
@@ -83,28 +86,170 @@ class StartProxyRequest(BaseModel):
 
 # ─── 上游 Key 管理 ───
 
+def _points_from_quota(remaining, total) -> str:
+    """账号 quota → points 字符串「剩余/总量」"""
+    try:
+        rem = float(remaining or 0)
+        tot = float(total or 0)
+    except (TypeError, ValueError):
+        return ""
+    if rem <= 0 and tot <= 0:
+        return ""
+    return f"{rem:.0f}/{tot:.0f}"
+
+
+def _resolve_account_for_pool(uid: str = "", api_key: str = ""):
+    """按 uid 或凭证从账号表解析加池所需字段。"""
+    from utils.store import load_accounts
+
+    accounts = load_accounts()
+    account = None
+    if uid:
+        account = next((a for a in accounts if a.uid == uid), None)
+        if not account:
+            raise HTTPException(status_code=404, detail=f"账号不存在: {uid}")
+    elif api_key:
+        account = next(
+            (
+                a
+                for a in accounts
+                if a.api_key == api_key or a.auth_token == api_key or a.nickname == api_key
+            ),
+            None,
+        )
+
+    if not account:
+        return None
+
+    credential = (account.api_key or account.auth_token or "").strip()
+    label = (account.nickname or "").strip()
+    if not label and credential:
+        label = credential[:12] if credential.startswith("ck_") else (
+            f"JWT···{credential[-6:]}" if len(credential) > 6 else credential
+        )
+    points = _points_from_quota(
+        getattr(account.quota, "credits_remaining", 0),
+        getattr(account.quota, "credits_total", 0),
+    )
+    return {
+        "uid": account.uid,
+        "credential": credential,
+        "label": label,
+        "points": points,
+        "auth_mode": "api_key" if (account.api_key or "").startswith("ck_") else "jwt",
+    }
+
+
+def _backfill_upstream_keys(db: ProxyDatabase) -> int:
+    """回填空 label/points 的上游 Key（按凭证匹配账号表）。"""
+    from utils.store import load_accounts
+
+    accounts = load_accounts()
+    by_cred = {}
+    for a in accounts:
+        for token in (a.api_key, a.auth_token, a.nickname):
+            if token:
+                by_cred[token] = a
+
+    fixed = 0
+    for k in db.get_upstream_keys():
+        updates = {}
+        cred = (k.get("api_key") or "").strip()
+        label = (k.get("label") or "").strip()
+        points = (k.get("points") or "").strip()
+        account = by_cred.get(cred) if cred else None
+        if not account and label:
+            account = by_cred.get(label)
+
+        if account:
+            if not label:
+                nick = (account.nickname or "").strip()
+                if nick:
+                    updates["label"] = nick
+            if not cred:
+                new_cred = (account.api_key or account.auth_token or "").strip()
+                if new_cred:
+                    updates["api_key"] = new_cred
+                    updates["auth_mode"] = (
+                        "api_key" if (account.api_key or "").startswith("ck_") else "jwt"
+                    )
+            if not points or "/" not in points:
+                p = _points_from_quota(
+                    getattr(account.quota, "credits_remaining", 0),
+                    getattr(account.quota, "credits_total", 0),
+                )
+                if p:
+                    updates["points"] = p
+                    updates["points_updated_at"] = datetime.now().isoformat()
+            if not k.get("account_uid") and account.uid:
+                updates["account_uid"] = account.uid
+
+        if updates:
+            db.update_upstream_key(k["key_id"], updates)
+            fixed += 1
+    return fixed
+
+
 @router.get("/keys")
 def list_upstream_keys():
-    """获取上游 Key 列表"""
+    """获取上游 Key 列表（顺带轻量回填空 label/积分）"""
     db = ProxyDatabase.get_instance()
+    try:
+        _backfill_upstream_keys(db)
+    except Exception as e:
+        logger.warning(f"上游 Key 回填跳过: {e}")
     return db.get_upstream_keys()
 
 
 @router.post("/keys")
 def add_upstream_key(req: AddUpstreamKeyRequest):
-    """添加上游 Key - 生成 key_id、label 等必需字段"""
+    """添加上游 Key - 支持 uid（推荐）或直接 api_key"""
     db = ProxyDatabase.get_instance()
+
+    resolved = None
+    if req.uid:
+        resolved = _resolve_account_for_pool(uid=req.uid)
+    elif req.api_key:
+        resolved = _resolve_account_for_pool(api_key=req.api_key.strip())
+
+    if resolved:
+        credential = resolved["credential"]
+        label = req.nickname or req.label or resolved["label"]
+        points = resolved["points"]
+        account_uid = resolved["uid"]
+        auth_mode = resolved["auth_mode"]
+    else:
+        credential = (req.api_key or "").strip()
+        label = (req.nickname or req.label or "").strip()
+        if not label and credential:
+            label = credential[:12]
+        points = ""
+        account_uid = ""
+        auth_mode = "api_key" if credential.startswith("ck_") else ("jwt" if credential else "")
+
+    if not credential:
+        raise HTTPException(status_code=400, detail="无法解析凭证：请传 uid 或有效的 api_key/auth_token")
+
+    # 避免重复入池（同一凭证）
+    for existing in db.get_upstream_keys():
+        if existing.get("api_key") == credential or (
+            account_uid and existing.get("account_uid") == account_uid
+        ):
+            raise HTTPException(status_code=400, detail="该账号已在代理池中")
+
     key_data = {
         "key_id": f"ck_{secrets.token_hex(4)}",
-        "api_key": req.api_key,
-        "label": req.nickname or req.api_key[:12],
+        "api_key": credential,
+        "label": label or credential[:12],
+        "account_uid": account_uid,
+        "auth_mode": auth_mode,
         "status": "active",
         "key_mode": req.key_mode,
         "allowed_models": req.allowed_models,
         "weight": req.weight,
         "max_points": req.max_points,
-        "points": "",
-        "points_updated_at": "",
+        "points": points,
+        "points_updated_at": datetime.now().isoformat() if points else "",
         "packages": [],
         "used_count": 0,
         "total_prompt_tokens": 0,
@@ -126,6 +271,9 @@ def update_upstream_key(key_id: str, req: UpdateUpstreamKeyRequest):
     """更新上游 Key"""
     db = ProxyDatabase.get_instance()
     updates = {k: v for k, v in req.dict().items() if v is not None}
+    # nickname → label（存储字段）
+    if "nickname" in updates:
+        updates["label"] = updates.pop("nickname")
     db.update_upstream_key(key_id, updates)
     return {"success": True}
 

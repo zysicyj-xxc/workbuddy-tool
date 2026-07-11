@@ -154,6 +154,23 @@ def _apply_quota_result(account, result: dict, *, sync_checkin: bool = True) -> 
             sync_checkin_from_packages(account, pkg_dicts)
         except Exception as e:
             logger.debug(f"从资源包同步签到状态失败: {e}")
+    # 同步到代理池上游 Key（按 ck_/auth_token/手机号/uid 匹配）
+    try:
+        from modules.proxy_server import ProxyDatabase
+        match_key = (
+            account.api_key
+            if (account.api_key and account.api_key.startswith("ck_"))
+            else (account.auth_token or account.nickname or account.uid)
+        )
+        if match_key:
+            ProxyDatabase.get_instance().sync_quota_to_key(
+                api_key_or_token=match_key,
+                remaining_credits=account.quota.credits_remaining,
+                total_credits=account.quota.credits_total,
+                packages=pkg_dicts,
+            )
+    except Exception as e:
+        logger.debug(f"同步积分到代理池失败: {e}")
     save_account(account)
     return pkg_dicts
 

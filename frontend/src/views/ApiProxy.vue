@@ -70,10 +70,49 @@ const allAccounts = ref([])
 const selectedUids = ref([])
 const accountLoading = ref(false)
 
-const pooledApiKeys = computed(() => new Set(upstreamKeys.value.map((k) => k.api_key)))
-const availableAccounts = computed(() =>
-  allAccounts.value.filter((a) => !pooledApiKeys.value.has(a.api_key))
-)
+/** 代理池已占用：凭证 + account_uid，避免空 api_key 误判 */
+const pooledIdentity = computed(() => {
+  const keys = new Set()
+  const uids = new Set()
+  for (const k of upstreamKeys.value) {
+    if (k.api_key) keys.add(k.api_key)
+    if (k.account_uid) uids.add(k.account_uid)
+  }
+  return { keys, uids }
+})
+const availableAccounts = computed(() => {
+  const { keys, uids } = pooledIdentity.value
+  return allAccounts.value.filter((a) => {
+    if (a.uid && uids.has(a.uid)) return false
+    if (a.api_key && keys.has(a.api_key)) return false
+    return true
+  })
+})
+
+/** 凭证列：ck_ 截断 / JWT 末6位 / 空 → 未绑定凭证 */
+function formatCredential(key) {
+  const v = (key || '').trim()
+  if (!v) return { text: '未绑定凭证', kind: 'empty' }
+  if (v.startsWith('ck_')) return { text: `${v.slice(0, 16)}…`, kind: 'ck' }
+  // JWT 通常很长且含点
+  if (v.includes('.') || v.length > 40) {
+    return { text: `…${v.slice(-6)}`, kind: 'jwt' }
+  }
+  return { text: v.length > 20 ? `${v.slice(0, 16)}…` : v, kind: 'other' }
+}
+
+/** 积分列：解析「剩余/总量」，失败退回原串或 - */
+function formatPoints(points) {
+  const p = (points || '').trim()
+  if (!p) return '-'
+  const m = p.match(/^([\d.]+)\s*\/\s*([\d.]+)$/)
+  if (m) return `${Math.round(Number(m[1]))} / ${Math.round(Number(m[2]))}`
+  return p
+}
+
+function displayNickname(record) {
+  return record.label || record.key_id || '-'
+}
 
 async function loadUpstreamKeys() {
   keysLoading.value = true
@@ -116,10 +155,7 @@ async function submitAddKey() {
     let okCount = 0
     for (const acc of selected) {
       try {
-        await proxyApi.addKey({
-          api_key: acc.api_key,
-          label: acc.nickname || acc.api_key.slice(0, 12),
-        })
+        await proxyApi.addKey({ uid: acc.uid })
         okCount++
       } catch (e) {
         // 单个失败不阻断
@@ -136,7 +172,7 @@ async function submitAddKey() {
 function removeUpstreamKey(row) {
   Modal.warning({
     title: '移除确认',
-    content: `确定将账号「${row.label || row.api_key?.slice(0, 12)}」移出代理池吗？`,
+    content: `确定将账号「${displayNickname(row)}」移出代理池吗？`,
     hideCancel: false,
     okText: '移出',
     okType: 'danger',
@@ -182,7 +218,7 @@ function handlePoolPickerSelection(rows) {
 
 const selectedPoolLabels = computed(() => {
   if (!addSubKeyForm.allowed_key_ids.length) return ''
-  const m = new Map(upstreamKeys.value.map((k) => [k.key_id, k.label || k.api_key?.slice(0, 12)]))
+  const m = new Map(upstreamKeys.value.map((k) => [k.key_id, displayNickname(k)]))
   return addSubKeyForm.allowed_key_ids.map((id) => m.get(id) || id).join('、')
 })
 
@@ -411,11 +447,22 @@ onMounted(() => {
           >
             <template #columns>
               <a-table-column title="昵称" :min-width="120">
-                <template #cell="{ record }">{{ record.label || '-' }}</template>
+                <template #cell="{ record }">{{ displayNickname(record) }}</template>
               </a-table-column>
-              <a-table-column title="API Key" :min-width="180">
+              <a-table-column title="凭证" :min-width="200">
                 <template #cell="{ record }">
-                  <code class="text-mono">{{ record.api_key?.slice(0, 16) }}...</code>
+                  <span v-if="formatCredential(record.api_key).kind === 'empty'" class="text-secondary">
+                    未绑定凭证
+                  </span>
+                  <template v-else>
+                    <a-tag
+                      v-if="formatCredential(record.api_key).kind === 'jwt'"
+                      color="orangered"
+                      size="small"
+                      style="margin-right: 6px"
+                    >JWT</a-tag>
+                    <code class="text-mono">{{ formatCredential(record.api_key).text }}</code>
+                  </template>
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="110">
@@ -425,8 +472,8 @@ onMounted(() => {
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="积分" :min-width="120">
-                <template #cell="{ record }">{{ record.points || '-' }}</template>
+              <a-table-column title="积分（剩余/总量）" :min-width="140">
+                <template #cell="{ record }">{{ formatPoints(record.points) }}</template>
               </a-table-column>
               <a-table-column title="使用次数" :width="100">
                 <template #cell="{ record }">{{ record.used_count ?? 0 }}</template>
@@ -592,9 +639,10 @@ onMounted(() => {
         >
           <template #columns>
             <a-table-column title="昵称" data-index="nickname" :min-width="120" />
-            <a-table-column title="API Key" :min-width="180">
+            <a-table-column title="凭证" :min-width="200">
               <template #cell="{ record }">
-                <code class="text-mono">{{ record.api_key?.slice(0, 20) }}...</code>
+                <span v-if="!record.api_key" class="text-secondary">手机号/JWT 账号</span>
+                <code v-else class="text-mono">{{ formatCredential(record.api_key).text }}</code>
               </template>
             </a-table-column>
             <a-table-column title="剩余/总积分" :width="140">
@@ -703,11 +751,14 @@ onMounted(() => {
       >
         <template #columns>
           <a-table-column title="昵称" :min-width="120">
-            <template #cell="{ record }">{{ record.label || '-' }}</template>
+            <template #cell="{ record }">{{ displayNickname(record) }}</template>
           </a-table-column>
-          <a-table-column title="API Key" :min-width="200">
+          <a-table-column title="凭证" :min-width="200">
             <template #cell="{ record }">
-              <code class="text-mono">{{ record.api_key?.slice(0, 18) }}...</code>
+              <span v-if="formatCredential(record.api_key).kind === 'empty'" class="text-secondary">
+                未绑定凭证
+              </span>
+              <code v-else class="text-mono">{{ formatCredential(record.api_key).text }}</code>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="100">

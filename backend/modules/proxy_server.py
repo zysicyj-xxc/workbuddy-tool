@@ -992,14 +992,38 @@ class ProxyDatabase:
             total_credits: 总积分
             packages: 积分组列表（来自 ResourcePackage），格式为 [{cycle_remain, cycle_end, ...}]
         """
+        # 扩展匹配集：凭证本身 + 同账号的 api_key/auth_token/nickname/uid
+        match_tokens = {api_key_or_token} if api_key_or_token else set()
+        if api_key_or_token:
+            try:
+                from utils.store import load_accounts
+                for a in load_accounts():
+                    if (
+                        a.api_key == api_key_or_token
+                        or a.auth_token == api_key_or_token
+                        or a.nickname == api_key_or_token
+                        or a.uid == api_key_or_token
+                    ):
+                        for t in (a.api_key, a.auth_token, a.nickname, a.uid):
+                            if t:
+                                match_tokens.add(t)
+                        break
+            except Exception:
+                pass
+
         with self._lock:
             keys = self._data.setdefault("upstream_keys", [])
             matched = False
             for k in keys:
-                # 匹配 api_key 或 label（label 存的是手机号，api_key 存的是 ck_xxx）
+                # 匹配：凭证 api_key、label（手机号）、account_uid
                 k_api_key = k.get("api_key", "")
                 k_label = k.get("label", "")
-                if k_api_key == api_key_or_token or k_label == api_key_or_token:
+                k_uid = k.get("account_uid", "")
+                if (
+                    (k_api_key and k_api_key in match_tokens)
+                    or (k_label and k_label in match_tokens)
+                    or (k_uid and k_uid in match_tokens)
+                ):
                     matched = True
                     old_status = k.get("status", "active")
                     # 更新积分
