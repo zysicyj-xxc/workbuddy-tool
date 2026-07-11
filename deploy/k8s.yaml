@@ -162,4 +162,4 @@ spec:
   tls:
     - hosts:
         - workbuddy.example.com
-      secretName: workbuddy-tls
+      secretName: zysicyj-tls
