@@ -102,11 +102,11 @@ spec:
                 secretKeyRef:
                   name: workbuddy-basic-auth
                   key: BASIC_AUTH_PASSWORD
-            # 出站 TLS / 代理按环境按需配置（勿写入真实内网地址）
+            # 阿里云节点出站需走 gost，且上游有自签拦截
             - name: HTTP_SSL_VERIFY
-              value: "true"
+              value: "false"
             - name: OUTBOUND_PROXY
-              value: ""
+              value: "http://100.66.1.19:7890"
           volumeMounts:
             - name: data
               mountPath: /root/.workbuddy-tool
