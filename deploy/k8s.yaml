@@ -35,10 +35,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       app: workbuddy-tool
@@ -49,14 +46,13 @@ spec:
     spec:
       imagePullSecrets:
         - name: ccr-registry
-      # 可选：固定到指定节点 / 污点（按集群填写，勿提交真实主机名）
-      # nodeSelector:
-      #   kubernetes.io/hostname: your-node-name
-      # tolerations:
-      #   - key: "dedicated"
-      #     operator: "Equal"
-      #     value: "high-bandwidth"
-      #     effect: "NoSchedule"
+      nodeSelector:
+        kubernetes.io/hostname: izbp1162y0ixyktq00v6nrz
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "high-bandwidth"
+          effect: "NoSchedule"
       containers:
         - name: workbuddy-tool
           # 按自己的镜像仓库修改
