@@ -133,14 +133,26 @@ jobs:
           Write-Host "version=$appVersion build_time=$buildTime sha=$sha"
 
       - name: Login to container registry
+        env:
+          CCR_USERNAME: ${{ secrets.CCR_USERNAME }}
+          CCR_PASSWORD: ${{ secrets.CCR_PASSWORD }}
         run: |
-          # CCR 变量是「仓库前缀」如 ccr.../ns/repo，login 只需 registry host
           $registry = ($env:CCR -split '/')[0]
-          Write-Host "docker login $registry"
-          $pass = '${{ secrets.CCR_PASSWORD }}'
-          $user = '${{ secrets.CCR_USERNAME }}'
-          $pass | & $env:DOCKER_EXE login $registry -u $user --password-stdin
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $loggedIn = $false
+          if ($env:CCR_USERNAME -and $env:CCR_PASSWORD) {
+            Write-Host "Trying docker login $registry as $($env:CCR_USERNAME)"
+            $env:CCR_PASSWORD | & $env:DOCKER_EXE login $registry -u $env:CCR_USERNAME --password-stdin
+            if ($LASTEXITCODE -eq 0) { $loggedIn = $true }
+          }
+          if (-not $loggedIn) {
+            Write-Host "Secret login unavailable; probing existing docker credentials on self-hosted runner"
+            & $env:DOCKER_EXE pull "$($env:CCR):$($env:IMAGE_NAME)-latest"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "CCR auth failed: update repo secrets CCR_USERNAME/CCR_PASSWORD (login host=$registry)"
+              exit 1
+            }
+            Write-Host "Existing docker credentials OK"
+          }
 
       - name: Build and push image
         run: |
