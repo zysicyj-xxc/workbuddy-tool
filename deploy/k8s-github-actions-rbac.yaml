@@ -1,0 +1,43 @@
+# GitHub Actions 部署用 ServiceAccount（一次性 apply 到集群）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: github-actions-deploy
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: github-actions-deploy
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "secrets", "services", "persistentvolumeclaims", "pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "apply"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "apply"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "apply"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: github-actions-deploy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: github-actions-deploy
+subjects:
+  - kind: ServiceAccount
+    name: github-actions-deploy
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-actions-deploy-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: github-actions-deploy
+type: kubernetes.io/service-account-token

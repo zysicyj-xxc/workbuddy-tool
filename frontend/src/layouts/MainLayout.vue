@@ -123,13 +123,43 @@ watch(notifyVisible, (v) => {
   if (v) loadNotifications()
 })
 
-// ─── 生命周期 ───
 import { onBeforeUnmount, onMounted } from 'vue'
+
+const appVersion = ref({ version: '1.0.0', build_time: '', git_sha: '' })
+
+const versionLabel = computed(() => {
+  const v = appVersion.value.version || '1.0.0'
+  return v.startsWith('v') ? v : `v${v}`
+})
+
+const versionHint = computed(() => {
+  const parts = []
+  if (appVersion.value.build_time) parts.push(`部署 ${appVersion.value.build_time}`)
+  if (appVersion.value.git_sha) parts.push(appVersion.value.git_sha)
+  return parts.join(' · ') || 'WorkBuddy Tool'
+})
+
+async function loadVersion() {
+  try {
+    const resp = await fetch('/api/version')
+    if (!resp.ok) return
+    const data = await resp.json()
+    appVersion.value = {
+      version: data.version || '1.0.0',
+      build_time: data.build_time || '',
+      git_sha: data.git_sha || '',
+    }
+  } catch {
+    // 角标失败不影响主流程
+  }
+}
+
 onMounted(() => {
   detectViewport()
   window.addEventListener('resize', detectViewport)
   window.addEventListener('keydown', handleKeydown)
   loadNotifications()
+  loadVersion()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', detectViewport)
@@ -171,6 +201,12 @@ onBeforeUnmount(() => {
           {{ item.title }}
         </a-menu-item>
       </a-menu>
+      <div class="sider-version" :title="versionHint">
+        <span class="sider-version-tag">{{ versionLabel }}</span>
+        <span v-if="!collapsed && appVersion.build_time" class="sider-version-time">
+          {{ appVersion.build_time }}
+        </span>
+      </div>
     </a-layout-sider>
 
     <!-- 移动端抽屉式侧边栏 -->
@@ -198,6 +234,12 @@ onBeforeUnmount(() => {
           {{ item.title }}
         </a-menu-item>
       </a-menu>
+      <div class="sider-version" :title="versionHint">
+        <span class="sider-version-tag">{{ versionLabel }}</span>
+        <span v-if="appVersion.build_time" class="sider-version-time">
+          {{ appVersion.build_time }}
+        </span>
+      </div>
     </a-drawer>
 
     <a-layout class="layout-body">
@@ -366,6 +408,31 @@ onBeforeUnmount(() => {
   flex: 1;
   background-color: transparent;
   border-right: none;
+  overflow-y: auto;
+}
+
+.sider-version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--color-border-2);
+  color: var(--color-text-3);
+  font-size: 11px;
+  line-height: 1.35;
+  flex-shrink: 0;
+
+  .sider-version-tag {
+    font-weight: 600;
+    color: var(--color-text-2);
+    letter-spacing: 0.02em;
+  }
+
+  .sider-version-time {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .layout-body {

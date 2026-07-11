@@ -39,8 +39,8 @@ app.add_middleware(
 # ─── HTTP Basic Auth（BASIC_AUTH_PASSWORD 未设置时关闭，便于本地开发）───
 BASIC_AUTH_USER = os.getenv("BASIC_AUTH_USER", "admin")
 BASIC_AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", "")
-# 探针与健康检查免鉴权
-_BASIC_AUTH_SKIP_PATHS = frozenset({"/api/health", "/health"})
+# 探针 / 健康检查 / 版本信息免鉴权
+_BASIC_AUTH_SKIP_PATHS = frozenset({"/api/health", "/health", "/api/version"})
 
 
 @app.middleware("http")
@@ -75,6 +75,16 @@ async def basic_auth_middleware(request: Request, call_next):
 def health():
     """K8s 探针用，不受 Basic Auth 保护。"""
     return {"status": "ok"}
+
+
+@app.get("/api/version", include_in_schema=False)
+def version_info():
+    """前端左下角版本角标用；构建时注入 APP_VERSION / APP_BUILD_TIME / GIT_SHA。"""
+    return {
+        "version": os.getenv("APP_VERSION", "1.0.0"),
+        "build_time": os.getenv("APP_BUILD_TIME", ""),
+        "git_sha": os.getenv("GIT_SHA", ""),
+    }
 
 # 注册 API 路由
 from api import accounts, checkin, quota, proxy, dashboard, data

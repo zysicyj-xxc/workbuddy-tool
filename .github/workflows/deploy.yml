@@ -2,13 +2,13 @@
 # 凭据仅通过 GitHub Secrets / Variables 注入，仓库内不含密码。
 #
 # Runner 要求：组织 Runner「ZYS-V1」需添加自定义标签 ZYS-V1
-#   GitHub → zysicyj-xxc → Settings → Actions → Runners → ZYS-V1 → Labels
 #
-# 建议配置（优先用组织 Variables，仓库级可覆盖）：
-#   vars.CCR              镜像仓库前缀，如 ccr.ccs.tencentyun.com/zysicyj/storehouse1
-#   vars.DEPLOY_HOST      Ingress 域名，如 workbuddy.zysicyj.top
-#   vars.KUBECONFIG_FILE  Runner 本机 kubeconfig（须指向 master 公网 6443，
-#                         默认 C:\code\.kube\config.public → https://119.45.242.45:6443）
+# 组织级配置（visibility=all，所有仓库可用）：
+#   vars.K3S_API_SERVER   master 公网 API，如 https://119.45.242.45:6443
+#   vars.CCR              镜像仓库前缀
+#   vars.DEPLOY_HOST      Ingress 域名（各仓库可覆盖）
+#   secrets.K3S_TOKEN     ServiceAccount token（见 deploy/k8s-github-actions-rbac.yaml）
+#   secrets.K3S_CA        集群 CA 证书 PEM
 #   secrets.CCR_USERNAME / secrets.CCR_PASSWORD
 
 name: Build and Deploy WorkBuddy-Tool
@@ -30,7 +30,7 @@ concurrency:
 
 env:
   CCR: ${{ vars.CCR || 'your-registry.example.com/your-namespace' }}
-  KUBECONFIG_FILE: ${{ vars.KUBECONFIG_FILE || 'C:\code\.kube\config.public' }}
+  K3S_API_SERVER: ${{ vars.K3S_API_SERVER || 'https://119.45.242.45:6443' }}
   DOCKER_BUILDKIT: "1"
   DOCKER_EXE: C:\Program Files\Docker\Docker\resources\bin\docker.exe
   KUBECTL_EXE: C:\Program Files\Docker\Docker\resources\bin\kubectl.exe
@@ -50,11 +50,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Configure kubectl from token
+        env:
+          K3S_TOKEN: ${{ secrets.K3S_TOKEN }}
+          K3S_CA: ${{ secrets.K3S_CA }}
+        run: |
+          if (-not $env:K3S_TOKEN -or -not $env:K3S_CA) {
+            Write-Error "Missing org secrets K3S_TOKEN / K3S_CA"
+            exit 1
+          }
+          $kubeDir = Join-Path $env:RUNNER_TEMP 'kube'
+          New-Item -ItemType Directory -Force -Path $kubeDir | Out-Null
+          $kubeConfig = Join-Path $kubeDir 'config'
+          $caFile = Join-Path $kubeDir 'ca.crt'
+          [System.IO.File]::WriteAllText($caFile, $env:K3S_CA.Trim())
+          & $env:KUBECTL_EXE config set-cluster k3s `
+            --server=$env:K3S_API_SERVER `
+            --certificate-authority=$caFile `
+            --embed-certs=true `
+            --kubeconfig=$kubeConfig | Out-Null
+          & $env:KUBECTL_EXE config set-credentials github-actions `
+            --token=$env:K3S_TOKEN `
+            --kubeconfig=$kubeConfig | Out-Null
+          & $env:KUBECTL_EXE config set-context default `
+            --cluster=k3s --user=github-actions `
+            --kubeconfig=$kubeConfig | Out-Null
+          & $env:KUBECTL_EXE config use-context default --kubeconfig=$kubeConfig | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "KUBECONFIG_FILE=$kubeConfig"
+          & $env:KUBECTL_EXE --kubeconfig=$kubeConfig get deploy -n $env:NAMESPACE
+          Write-Host "kubectl ready via token -> $env:K3S_API_SERVER"
+
       - name: Set image tag
         run: |
-          $tag = "$(Get-Date -Format 'yyyyMMddHHmmss')-$($env:GITHUB_SHA.Substring(0,7))"
-          Add-Content -Path $env:GITHUB_ENV -Value "IMAGE_TAG=$tag"
-          Write-Host "Image tag: $tag"
+          $appVersion = if ($env:GITHUB_REF_NAME -match '^v?(\d+\.\d+\.\d+)$') { $Matches[1] } else { '1.0.0' }
+          $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+          $sha = $env:GITHUB_SHA.Substring(0,7)
+          # 用户指定版本 tag：1.0.0；同时保留带 sha 的唯一标签便于回滚
+          Add-Content -Path $env:GITHUB_ENV -Value "APP_VERSION=$appVersion"
+          Add-Content -Path $env:GITHUB_ENV -Value "APP_BUILD_TIME=$buildTime"
+          Add-Content -Path $env:GITHUB_ENV -Value "GIT_SHA=$sha"
+          Add-Content -Path $env:GITHUB_ENV -Value "IMAGE_TAG=$appVersion"
+          Add-Content -Path $env:GITHUB_ENV -Value "IMAGE_TAG_SHA=$appVersion-$sha"
+          Write-Host "version=$appVersion build_time=$buildTime sha=$sha"
 
       - name: Login to container registry
         run: |
@@ -63,16 +100,23 @@ jobs:
       - name: Build and push image
         run: |
           $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          $taggedSha = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG_SHA)"
           $latest = "$($env:CCR):$($env:IMAGE_NAME)-latest"
-          & $env:DOCKER_EXE build -t $tagged -t $latest -f Dockerfile .
+          & $env:DOCKER_EXE build `
+            --build-arg "APP_VERSION=$($env:APP_VERSION)" `
+            --build-arg "APP_BUILD_TIME=$($env:APP_BUILD_TIME)" `
+            --build-arg "GIT_SHA=$($env:GIT_SHA)" `
+            -t $tagged -t $taggedSha -t $latest -f Dockerfile .
           & $env:DOCKER_EXE push $tagged
+          & $env:DOCKER_EXE push $taggedSha
           & $env:DOCKER_EXE push $latest
           Write-Host "Pushed: $tagged"
+          Write-Host "Pushed: $taggedSha"
           Write-Host "Pushed: $latest"
 
       - name: Render K8s manifests
         run: |
-          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG_SHA)"
           $manifest = Get-Content deploy/k8s.yaml -Raw
           $manifest = $manifest.Replace(
             'your-registry.example.com/your-namespace/workbuddy-tool:latest',
@@ -113,20 +157,31 @@ jobs:
         run: |
           $k = $env:KUBECTL_EXE
           $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
-          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG)"
+          $tagged = "$($env:CCR):$($env:IMAGE_NAME)-$($env:IMAGE_TAG_SHA)"
           & $k $kc -n $env:NAMESPACE set image deployment/$env:DEPLOY_NAME workbuddy-tool=$tagged
+          & $k $kc -n $env:NAMESPACE annotate deployment/$env:DEPLOY_NAME `
+            "workbuddy.io/version=$($env:APP_VERSION)" `
+            "workbuddy.io/build-time=$($env:APP_BUILD_TIME)" `
+            "workbuddy.io/git-sha=$($env:GIT_SHA)" --overwrite
           & $k $kc -n $env:NAMESPACE rollout status deployment/$env:DEPLOY_NAME --timeout=180s
           & $k $kc -n $env:NAMESPACE get pods -o wide
 
       - name: Verify health
         run: |
           $url = "https://$($env:HOST)/api/health"
+          $verUrl = "https://$($env:HOST)/api/version"
           Write-Host "Checking $url"
           for ($i = 1; $i -le 12; $i++) {
             try {
               $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10
               if ($resp.StatusCode -eq 200) {
                 Write-Host "Health OK: $($resp.StatusCode)"
+                $ver = Invoke-RestMethod -Uri $verUrl -TimeoutSec 10
+                Write-Host ("Version: {0} build_time={1} sha={2}" -f $ver.version, $ver.build_time, $ver.git_sha)
+                if ($ver.version -ne $env:APP_VERSION) {
+                  Write-Error "Version mismatch: got $($ver.version) expected $($env:APP_VERSION)"
+                  exit 1
+                }
                 exit 0
               }
             } catch {

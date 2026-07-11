@@ -132,14 +132,16 @@ cd frontend && npm ci && npm run dev
 
 见 `deploy/k8s.yaml`（镜像 / 域名已换成占位符）。`workbuddy-db-conf` / `workbuddy-basic-auth` 需集群内单独创建 Secret，清单内不含明文密码。
 
-**CI/CD**：`main` 分支推送后由组织 Runner **ZYS-V1**（标签 `ZYS-V1`）自动构建并部署；也可在 Actions 页手动 `workflow_dispatch`。凭据走 GitHub Secrets / Variables：
+**CI/CD**：`main` 推送后由组织 Runner **ZYS-V1** 自动构建并部署。kubectl 用组织 Secret 里的 **token** 临时生成 kubeconfig，Runner 上**不需要**放 kubeconfig 文件。
 
 | 类型 | 名称 | 说明 |
 |------|------|------|
-| Variable | `CCR` | 镜像前缀，如 `ccr.ccs.tencentyun.com/zysicyj/storehouse1`（组织级已设） |
-| Variable | `DEPLOY_HOST` | 域名，如 `workbuddy.zysicyj.top`（组织级已设） |
-| Variable | `KUBECONFIG_FILE` | Runner 本机 kubeconfig，须指向 **master 公网** `https://119.45.242.45:6443`（组织默认 `C:\code\.kube\config.public`） |
+| Variable | `K3S_API_SERVER` | master 公网 API，如 `https://119.45.242.45:6443`（组织级） |
+| Secret | `K3S_TOKEN` / `K3S_CA` | 部署用 SA token + 集群 CA（组织级） |
+| Variable | `CCR` / `DEPLOY_HOST` | 镜像前缀、域名（组织级，仓库可覆盖） |
 | Secret | `CCR_USERNAME` / `CCR_PASSWORD` | 镜像仓库登录 |
+
+SA/RBAC 见 `deploy/k8s-github-actions-rbac.yaml`（已在集群 apply）。
 
 ## License
 
