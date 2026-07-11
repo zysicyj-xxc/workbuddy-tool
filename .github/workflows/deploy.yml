@@ -188,15 +188,20 @@ jobs:
           $k = $env:KUBECTL_EXE
           $kc = "--kubeconfig=$($env:KUBECONFIG_FILE)"
           & $k $kc create namespace $env:NAMESPACE --dry-run=client -o yaml | & $k $kc apply -f -
-          foreach ($s in @('ccr-registry','workbuddy-tls')) {
+          foreach ($s in @('ccr-registry','zysicyj-tls')) {
             $exists = & $k $kc get secret $s -n $env:NAMESPACE --ignore-not-found -o name 2>$null
             if ($exists) {
               Write-Host "Secret $s already exists in $($env:NAMESPACE), skip"
               continue
             }
             Write-Host "Copying secret $s from default to $($env:NAMESPACE)"
-            $json = & $k $kc get secret $s -n default -o json
+            $json = & $k $kc get secret $s -n default -o json 2>$null
+            if (-not $json) {
+              Write-Warning "Secret $s not found in default either; skip (Ingress may already use another TLS secret)"
+              continue
+            }
             $obj = $json | ConvertFrom-Json
+            if (-not $obj) { continue }
             $obj.metadata.PSObject.Properties.Remove('uid')
             $obj.metadata.PSObject.Properties.Remove('resourceVersion')
             $obj.metadata.PSObject.Properties.Remove('creationTimestamp')
