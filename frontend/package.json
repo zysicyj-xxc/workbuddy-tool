@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-tool-frontend",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "WorkBuddy Tool 前端 - Element Plus 重构版",
   "private": true,
   "type": "module",

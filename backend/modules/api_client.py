@@ -402,12 +402,16 @@ class ApiClient:
 
         # 签到成功 (code=0)
         if code == 0:
-            data = result.get("data", {})
+            data = result.get("data", {}) or {}
             return {
                 "success": True,
-                "credit": data.get("credit", 0),
-                "streak_days": data.get("streak_days", 0),
-                "is_streak_day": data.get("is_streak_day", False),
+                "credit": int(data.get("credit", data.get("Credit", 0)) or 0),
+                "streak_days": int(
+                    data.get("streak_days", data.get("streakDays", 0)) or 0
+                ),
+                "is_streak_day": bool(
+                    data.get("is_streak_day", data.get("isStreakDay", False))
+                ),
             }
 
         # 已签到：code=10001 是服务端返回的"今天已签到"错误码

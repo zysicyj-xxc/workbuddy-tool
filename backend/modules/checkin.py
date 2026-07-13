@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from models import Account, Platform
@@ -11,6 +11,8 @@ from utils.store import save_account
 from modules.api_client import ApiClient
 
 logger = logging.getLogger(__name__)
+
+_CHECKIN_PKG_KEYWORD = "运营裂变包"
 
 
 def _pkg_field(pkg, name: str, default=""):
@@ -39,13 +41,39 @@ def _parse_cycle_start(cycle_start: str) -> datetime:
         return datetime.now()
 
 
+def _count_streak_from_packages(packages: list) -> int:
+    """从「运营裂变包」的 cycle_start 日期，自今天（或昨天）往前数连续天数。"""
+    dates = set()
+    for pkg in packages or []:
+        name = str(_pkg_field(pkg, "package_name", "") or "")
+        if _CHECKIN_PKG_KEYWORD not in name:
+            continue
+        cycle_start = str(_pkg_field(pkg, "cycle_start", "") or "")
+        if len(cycle_start) >= 10:
+            dates.add(cycle_start[:10])
+    if not dates:
+        return 0
+
+    today = datetime.now().date()
+    cursor = today
+    if cursor.strftime("%Y-%m-%d") not in dates:
+        cursor = today - timedelta(days=1)
+        if cursor.strftime("%Y-%m-%d") not in dates:
+            return 0
+
+    streak = 0
+    while cursor.strftime("%Y-%m-%d") in dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
 def sync_checkin_from_packages(account: Account, packages: list) -> bool:
     """根据资源包推断今日是否已签到，并更新 account.checkin。
 
     Returns:
         True 表示检测到今日已签到包。
     """
-    checkin_keyword = "运营裂变包"
     today = datetime.now().strftime("%Y-%m-%d")
     month_prefix = datetime.now().strftime("%Y-%m")
     monthly_credits = 0
@@ -53,7 +81,7 @@ def sync_checkin_from_packages(account: Account, packages: list) -> bool:
 
     for pkg in packages or []:
         name = str(_pkg_field(pkg, "package_name", "") or "")
-        if checkin_keyword not in name:
+        if _CHECKIN_PKG_KEYWORD not in name:
             continue
         cycle_start = str(_pkg_field(pkg, "cycle_start", "") or "")
         capacity = _pkg_field(pkg, "capacity_size", 0) or 0
@@ -66,19 +94,25 @@ def sync_checkin_from_packages(account: Account, packages: list) -> bool:
             today_start = cycle_start
 
     account.checkin.total_credits = monthly_credits
+
+    # 用资源包日期推算连续天数（比硬编码 1 更准；上游 checkin-status 仍会覆盖）
+    computed_streak = _count_streak_from_packages(packages)
+    if computed_streak > 0:
+        account.checkin.streak_days = computed_streak
+    elif today_start and account.checkin.streak_days == 0:
+        account.checkin.streak_days = 1
+
     if not today_start:
         return False
 
     parsed = _parse_cycle_start(today_start)
     if not account.checkin.checked_today:
         account.checkin.last_checkin_time = parsed
-    if account.checkin.streak_days == 0:
-        account.checkin.streak_days = 1
     return True
 
 
 def sync_checkin_from_status(account: Account, status) -> bool:
-    """用上游 checkin-status 回写本地签到状态。"""
+    """用上游 checkin-status 回写本地签到状态（streak 以服务端为准）。"""
     if status is None:
         return False
     today_checked = bool(getattr(status, "today_checked_in", False))
@@ -88,7 +122,7 @@ def sync_checkin_from_status(account: Account, status) -> bool:
     streak = int(getattr(status, "streak_days", 0) or 0)
     if not account.checkin.checked_today:
         account.checkin.mark_checked_today(credit)
-    if streak:
+    if streak > 0:
         account.checkin.streak_days = streak
     if credit and not account.checkin.daily_credit:
         account.checkin.daily_credit = credit
@@ -120,10 +154,17 @@ class CheckinManager:
                 account.checkin.mark_checked_today()
                 logger.info(f"今日已签到: {account.display_name}")
             else:
-                credit = result.get("credit", 0)
+                credit = int(result.get("credit", 0) or 0)
+                streak = int(result.get("streak_days", 0) or 0)
                 account.checkin.mark_checked_today(credit)
-                logger.info(f"签到成功: {account.display_name} +{credit}积分")
+                if streak > 0:
+                    account.checkin.streak_days = streak
+                logger.info(
+                    f"签到成功: {account.display_name} +{credit}积分 "
+                    f"连续{account.checkin.streak_days}天"
+                )
 
+            # 资源包：累计签到积分 + 连续天数兜底
             try:
                 quota_result = client.get_user_resource()
                 if quota_result["success"]:
@@ -148,6 +189,16 @@ class CheckinManager:
             except Exception:
                 pass
 
+            # checkin-status 为连续天数权威来源（含「今日已签到」无 streak 返回的情况）
+            try:
+                st = client.get_checkin_status()
+                if st.get("success") and st.get("data") is not None:
+                    sync_checkin_from_status(account, st["data"])
+            except Exception as e:
+                logger.debug(f"同步签到状态失败 {account.display_name}: {e}")
+
+            # 把最终 streak 带回给调用方/前端进度
+            result["streak_days"] = account.checkin.streak_days
             save_account(account)
         else:
             logger.warning(f"签到失败: {account.display_name} - {result.get('error')}")
@@ -163,10 +214,18 @@ class CheckinManager:
         results = {"success": 0, "failed": 0, "already": 0, "details": []}
         for account in accounts:
             if account.checkin.checked_today:
+                pkgs = getattr(getattr(account, "quota", None), "packages", None) or []
+                if pkgs:
+                    try:
+                        sync_checkin_from_packages(account, pkgs)
+                        save_account(account)
+                    except Exception:
+                        pass
                 results["already"] += 1
                 results["details"].append({
                     "account": account.display_name,
                     "status": "already",
+                    "streak": account.checkin.streak_days,
                     "message": f"今日已签到 (连续{account.checkin.streak_days}天)"
                 })
                 continue
@@ -239,6 +298,14 @@ class CheckinManager:
 
         for idx, account in enumerate(accounts, start=1):
             if account.checkin.checked_today:
+                # 用本地资源包缓存校正连续天数（避免长期停在 1）
+                pkgs = getattr(getattr(account, "quota", None), "packages", None) or []
+                if pkgs:
+                    try:
+                        sync_checkin_from_packages(account, pkgs)
+                        save_account(account)
+                    except Exception:
+                        pass
                 already += 1
                 yield self._sse("progress", {
                     "current": idx,
@@ -246,6 +313,7 @@ class CheckinManager:
                     "account": account.display_name,
                     "uid": account.uid,
                     "status": "already",
+                    "streak": account.checkin.streak_days,
                     "message": f"今日已签到 (连续 {account.checkin.streak_days} 天)",
                 })
                 continue
