@@ -37,7 +37,7 @@ class AddUpstreamKeyRequest(BaseModel):
     uid: str = ""  # 账号 uid：服务端取 api_key||auth_token + nickname
     nickname: str = ""
     label: str = ""  # 兼容旧前端误传的 label，等同 nickname
-    key_mode: int = 1  # 1=顺序, 2=随机, 3=负载均衡, 4=粘性会话
+    key_mode: int = 1  # 已废弃：统一走智能调度（临期3天优先 + 最少剩余粘住 + 100阈值切换），保留兼容
     allowed_models: list = []
     weight: int = 1
     max_points: float = 0  # 0=不限

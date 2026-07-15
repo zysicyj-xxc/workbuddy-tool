@@ -783,7 +783,7 @@ class SubApiKey:
     max_usage: int = 0           # 最大使用次数，0=无限
     used_count: int = 0          # 已使用次数
     rate_limit_rpm: int = 1000   # 每分钟最大请求数（默认1000）
-    key_mode: int = 1            # 调用模式：1=专一模式（一个Key用完再换），2=临期优先（优先用最快过期的Key）
+    key_mode: int = 1            # 已废弃：统一走智能调度（临期3天优先 + 最少剩余粘住 + 100阈值切换），保留字段仅为兼容
     created_at: str = ""
     # 统计
     total_prompt_tokens: int = 0
@@ -1593,9 +1593,11 @@ class ProxyDatabase:
 class ProxyRouter:
     """代理路由器 - 选择上游 Key 并转发请求
 
-    路由策略：顺序耗尽 — 优先使用第一个可用 Key，直到该 Key 耗尽（exhausted/disabled），
-    再切换到下一个。
-    
+    统一调度策略（智能调度）：
+    1. 优先：有剩余积分的资源包中任一在 3 天内过期的号 → 选最快过期的那一个
+    2. 否则：选总剩余积分最少的那一个号
+    3. 粘住选定的号继续用，直到其总剩余积分 ≤ 100 或该号不可用时，切换到下一个
+
     性能优化：
     - 使用 requests.Session 连接池，复用TCP+TLS连接
     - 缓存 upstream URL，避免每次请求都读 DB 加锁
@@ -1666,16 +1668,17 @@ class ProxyRouter:
                    key_mode: int = 1, request_data: dict = None) -> Optional[dict]:
         """选择一个可用的上游 Key（带缓存）
 
+        统一智能调度策略（key_mode 参数已废弃，保留仅为签名兼容，实际忽略）：
+        1. 优先：有剩余积分的资源包中任一在 3 天内过期的号 → 选最快过期的那一个
+        2. 否则：选总剩余积分最少的那一个号
+        3. 粘住选定的号继续用，直到其总剩余积分 ≤ 100 或该号不可用时，切换到下一个
+
         Args:
             model: 模型名（用于模型级冷却过滤）
             allowed_key_ids: 子Key限定的上游Key ID列表
             exclude: 本次请求已尝试过的 key_id 集合，用于重试时跳过
-            key_mode: 调用模式
-                1 = 专一模式（默认）：真正粘住一个 Key，用到不可用才换下一个
-                2 = 临期优先：优先调用积分组中最快过期的那组所在的 Key
-                3 = 轮询模式：round-robin 轮换，每次请求换一个 Key
-                4 = 会话亲和：同一会话绑定同一 Key，TTL 1 小时（优化项 #5/#7）
-            request_data: 请求体 dict（key_mode=4 时用于计算 session_id）
+            key_mode: 已废弃，保留兼容（统一走智能调度）
+            request_data: 请求体 dict（保留兼容，当前策略未使用）
 
         缓存 10 秒，减少 DB 锁竞争。
         """
@@ -1721,103 +1724,135 @@ class ProxyRouter:
         def _concurrent_count(k: dict) -> int:
             return self._concurrent_counts.get(k.get("key_id", ""), 0)
 
-        if key_mode == 4:
-            # 会话亲和模式（优化项 #5/#7）：同一会话绑定同一上游 Key，TTL 1 小时
-            session_id = self._get_session_id(request_data) if request_data else ""
-            if session_id:
-                # 检查已有的会话绑定
-                binding = self._sticky_sessions.get(session_id)
-                if binding:
-                    bound_key_id, expire_ts = binding
-                    if now > expire_ts:
-                        # 绑定已过期，清理
-                        self._sticky_sessions.pop(session_id, None)
-                    else:
-                        # 绑定有效，检查绑定的 Key 是否仍可调度
-                        for k in available:
-                            if k.get("key_id") == bound_key_id:
-                                return k
-                        # Key 不可调度，清理绑定并重新选择
-                        self._sticky_sessions.pop(session_id, None)
-                        logger.info(f"[会话亲和] session {session_id[:8]} 绑定的 Key 不可用，重新绑定")
-            # 无绑定或绑定失效，选择并发最低的 Key 并绑定
-            available.sort(key=_concurrent_count)
-            chosen = available[0]
-            if session_id:
-                self._sticky_sessions[session_id] = (chosen.get("key_id", ""), now + 3600)
-                logger.info(f"[会话亲和] session {session_id[:8]} 绑定 Key → {chosen.get('label', chosen.get('key_id', '')[:8])}")
-            return chosen
+        # === 统一智能调度策略 ===
+        # 规则：
+        # 1. 优先：有剩余积分的资源包中任一在 3 天内过期的号 → 选最快过期的那一个
+        # 2. 否则：选总剩余积分最少的那一个号
+        # 3. 粘住选定的号继续用，直到其总剩余积分 ≤ 100 或该号不可用时，切换到下一个
+        # 注：key_mode 参数保留只为签名兼容，实际统一走本策略。
+        SWITCH_THRESHOLD = 100.0    # 总剩余积分低于此值切换到下一个号
+        EXPIRY_PRIORITY_DAYS = 3   # 3 天内过期优先
 
-        elif key_mode == 2:
-            # 临期优先：找到所有 Key 中最快过期且有剩余积分的那组，优先用那个 Key
-            # 排序依据：每个 Key 的 packages 中最快到期的 cycle_end 时间
-            # 例如：KeyA 有 150分(明天过期) + 5000分(下月过期)，KeyB 有 3000分(后天过期)
-            #   → KeyA 排前面（150分明天过期最紧急）
-            # 负载感知：并发计数作为次级排序键（优化项 #6）
-            def _earliest_expiring_time(k: dict) -> float:
-                """返回该 Key 最快过期且有剩余积分的积分组的过期时间戳
-                越小越优先（越快过期），没有过期信息的排最后
-                """
-                packages = k.get("packages", [])
-                earliest = None
-                for pkg in packages:
-                    cycle_remain = 0
-                    cycle_end = ""
-                    if isinstance(pkg, dict):
-                        cycle_remain = float(pkg.get("cycle_remain", 0))
-                        cycle_end = str(pkg.get("cycle_end", ""))
-                    if cycle_remain <= 0:
-                        continue  # 跳过已耗尽的组
-                    if not cycle_end:
-                        continue  # 没有过期时间，跳过
-                    # 解析过期时间
-                    try:
-                        from datetime import datetime as _dt
-                        if "T" in cycle_end:
-                            # ISO 8601 格式: 2026-06-30T23:59:59Z
-                            dt = _dt.fromisoformat(cycle_end.replace("Z", "+00:00"))
-                            ts = dt.timestamp()
-                        else:
-                            try:
-                                ts = float(cycle_end)
-                            except ValueError:
-                                # 空格分隔格式: 2026-06-30 23:59:59
-                                dt = _dt.strptime(cycle_end, "%Y-%m-%d %H:%M:%S")
-                                ts = dt.timestamp()
-                        if earliest is None or ts < earliest:
-                            earliest = ts
-                    except (ValueError, TypeError):
-                        continue
-                # 有过期信息的返回最早时间，没有的排到最后
-                return earliest if earliest is not None else float('inf')
+        def _parse_cycle_end_ts(cycle_end: str) -> float:
+            """解析过期时间字符串为时间戳，失败/为空返回 +inf（排最后）"""
+            if not cycle_end:
+                return float('inf')
+            try:
+                if "T" in cycle_end:
+                    # ISO 8601: 2026-06-30T23:59:59Z
+                    dt = datetime.fromisoformat(str(cycle_end).replace("Z", "+00:00"))
+                    return dt.timestamp()
+                try:
+                    return float(cycle_end)
+                except ValueError:
+                    # 空格分隔: 2026-06-30 23:59:59
+                    dt = datetime.strptime(cycle_end, "%Y-%m-%d %H:%M:%S")
+                    return dt.timestamp()
+            except (ValueError, TypeError):
+                return float('inf')
 
-            # 临期时间为主排序键，并发计数为次级排序键（负载感知 #6）
-            available.sort(key=lambda k: (_earliest_expiring_time(k), _concurrent_count(k)))
-            return available[0]
+        def _total_remaining(k: dict) -> float:
+            """计算 Key 的总剩余积分
+            优先累加 packages 中各资源包的 cycle_remain；
+            packages 为空时 fallback 解析 points 字段 "剩余/总量" 的分子。
+            无任何积分信息返回 +inf（排最后，避免被误选）。
+            """
+            total = 0.0
+            has_pkg = False
+            for pkg in k.get("packages", []):
+                if not isinstance(pkg, dict):
+                    continue
+                try:
+                    cr = float(pkg.get("cycle_remain", 0) or 0)
+                except (TypeError, ValueError):
+                    cr = 0.0
+                if cr > 0:
+                    has_pkg = True
+                    total += cr
+            if has_pkg:
+                return total
+            points = str(k.get("points", ""))
+            if "/" in points:
+                try:
+                    return float(points.split("/")[0].strip())
+                except ValueError:
+                    pass
+            return float('inf')
 
-        elif key_mode == 3:
-            # 轮询模式：round-robin，每次请求轮换到下一个 Key
-            # 负载感知：先按并发计数排序，再轮询（优化项 #6）
-            available.sort(key=_concurrent_count)
-            idx = self._round_robin_index.get(pool_hash, 0)
-            idx = idx % len(available)
-            self._round_robin_index[pool_hash] = idx + 1
-            return available[idx]
+        def _has_expiring_pkg(k: dict, days: int) -> bool:
+            """是否有 days 天内过期且有剩余积分的资源包"""
+            threshold_ts = now + days * 86400
+            for pkg in k.get("packages", []):
+                if not isinstance(pkg, dict):
+                    continue
+                try:
+                    cr = float(pkg.get("cycle_remain", 0) or 0)
+                except (TypeError, ValueError):
+                    cr = 0.0
+                if cr <= 0:
+                    continue
+                ts = _parse_cycle_end_ts(str(pkg.get("cycle_end", "")))
+                if ts != float('inf') and ts <= threshold_ts:
+                    return True
+            return False
 
+        def _earliest_ts(k: dict) -> float:
+            """最早过期时间戳（仅计有剩余积分的资源包），无过期信息返回 +inf"""
+            earliest = float('inf')
+            for pkg in k.get("packages", []):
+                if not isinstance(pkg, dict):
+                    continue
+                try:
+                    cr = float(pkg.get("cycle_remain", 0) or 0)
+                except (TypeError, ValueError):
+                    cr = 0.0
+                if cr <= 0:
+                    continue
+                ts = _parse_cycle_end_ts(str(pkg.get("cycle_end", "")))
+                if ts < earliest:
+                    earliest = ts
+            return earliest
+
+        # 1. 检查当前粘住的 Key 是否仍可用且剩余充足
+        #    剩余 ≤ 100 时视为耗尽，切换到"下一个"号（排除当前号重新选择）
+        skip_ids = set()  # 已耗尽需跳过的 key_id（避免重新选择时又选中刚切换掉的号）
+        dedicated_id = self._dedicated_keys.get(pool_hash)
+        if dedicated_id:
+            for k in available:
+                if k.get("key_id") == dedicated_id:
+                    remaining = _total_remaining(k)
+                    if remaining > SWITCH_THRESHOLD:
+                        return k  # 继续用粘住的 Key
+                    logger.info(f"[智能调度] 池 {pool_hash[:8]} Key {dedicated_id[:8]} "
+                                f"剩余 {remaining:.0f} ≤ {SWITCH_THRESHOLD:.0f}，切换下一个")
+                    skip_ids.add(dedicated_id)  # 排除耗尽号，避免重新选中
+                    break
+            # 粘住的 Key 不可用或剩余不足，清除记录重新选择
+            self._dedicated_keys.pop(pool_hash, None)
+
+        # 重新选择候选集：排除刚耗尽的号；若排除后为空（全部耗尽），fallback 用全部可用
+        candidates = [k for k in available if k.get("key_id") not in skip_ids] or available
+
+        # 2. 重新选择：临期3天优先，否则最少剩余
+        expiring = [k for k in candidates if _has_expiring_pkg(k, EXPIRY_PRIORITY_DAYS)]
+        if expiring:
+            expiring.sort(key=lambda k: (_earliest_ts(k), _concurrent_count(k)))
+            chosen = expiring[0]
+            earliest = _earliest_ts(chosen)
+            exp_str = (datetime.fromtimestamp(earliest).strftime('%m-%d %H:%M')
+                       if earliest != float('inf') else 'N/A')
+            logger.info(f"[智能调度] 池 {pool_hash[:8]} 选中临期 Key "
+                        f"{chosen.get('label', chosen.get('key_id', '')[:8])} "
+                        f"剩余 {_total_remaining(chosen):.0f} 最早过期 {exp_str}")
         else:
-            # 专一模式：真正粘住一个 Key，用到它不可用才换下一个
-            dedicated_id = self._dedicated_keys.get(pool_hash)
-            if dedicated_id:
-                # 上次用的 Key 还在 available 里，继续用它
-                for k in available:
-                    if k.get("key_id") == dedicated_id:
-                        return k
-            # 上次的 Key 不可用了（或第一次），选并发最低的并记住（负载感知 #6）
-            available.sort(key=_concurrent_count)
-            chosen = available[0]
-            self._dedicated_keys[pool_hash] = chosen.get("key_id", "")
-            logger.info(f"[专一] 池 {pool_hash[:8]} 切换专一 Key → {chosen.get('label', chosen.get('key_id', '')[:8])}")
-            return chosen
+            candidates.sort(key=lambda k: (_total_remaining(k), _concurrent_count(k)))
+            chosen = candidates[0]
+            logger.info(f"[智能调度] 池 {pool_hash[:8]} 选中最少剩余 Key "
+                        f"{chosen.get('label', chosen.get('key_id', '')[:8])} "
+                        f"剩余 {_total_remaining(chosen):.0f}")
+
+        self._dedicated_keys[pool_hash] = chosen.get("key_id", "")
+        return chosen
 
     # ─── 优化项 #5/#7：粘性会话 session_id 提取 ───
     def _get_session_id(self, request_data: dict) -> str:
