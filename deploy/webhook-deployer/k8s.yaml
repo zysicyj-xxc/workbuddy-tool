@@ -1,0 +1,160 @@
+# webhook-deployer k8s 部署配置
+# 参考 hindsight 部署模式：Deployment + Service + Ingress + 最小权限 RBAC
+#
+# 部署方式：
+#   1. 先创建 secret：kubectl create secret generic webhook-deployer-token \
+#        -n webhook --from-literal=WEBHOOK_TOKEN=$(openssl rand -hex 16)
+#   2. kubectl apply -f deploy/webhook-deployer/k8s.yaml
+#   3. 验证：curl https://webhook.zysicyj.top/health
+#
+# 镜像构建：复用 CCR 个人版自动构建
+#   - 镜像名：ccr.ccs.tencentyun.com/zysicyj/webhook-deployer:latest
+#   - Dockerfile 路径：deploy/webhook-deployer/Dockerfile
+#   - 代码源绑定：GitHub zysicyj-xxc/workbuddy-tool（同一仓库）
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webhook
+---
+# === RBAC：ServiceAccount 只能 patch deployment/workbuddy-tool in workbuddy ns ===
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: webhook-deployer
+  namespace: webhook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: webhook-deployer-workbuddy
+  namespace: workbuddy
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    # 只允许 patch（rollout restart 用 patch 注入 annotation）
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: webhook-deployer-workbuddy
+  namespace: workbuddy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: webhook-deployer-workbuddy
+subjects:
+  - kind: ServiceAccount
+    name: webhook-deployer
+    namespace: webhook
+---
+# === Deployment ===
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-deployer
+  namespace: webhook
+  labels:
+    app: webhook-deployer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: webhook-deployer
+  template:
+    metadata:
+      labels:
+        app: webhook-deployer
+    spec:
+      serviceAccountName: webhook-deployer
+      imagePullSecrets:
+        - name: ccr-registry
+      containers:
+        - name: webhook-deployer
+          image: ccr.ccs.tencentyun.com/zysicyj/webhook-deployer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          env:
+            - name: WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: webhook-deployer-token
+                  key: WEBHOOK_TOKEN
+            - name: DEFAULT_NAMESPACE
+              value: "workbuddy"
+            # 允许触发的 deployment 白名单（逗号分隔）
+            - name: ALLOWED_DEPLOYMENTS
+              value: "workbuddy-tool"
+---
+# === Service ===
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-deployer
+  namespace: webhook
+spec:
+  type: ClusterIP
+  selector:
+    app: webhook-deployer
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+# === Ingress：复用 webhook.zysicyj.top 域名 ===
+# 注意：如果 webhook.zysicyj.top 的 Ingress 已存在（旧 webhook-deployer），
+# 先 kubectl delete ingress <旧名> -n <旧ns>，再 apply 本文件
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webhook-ingress
+  namespace: webhook
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: webhook.zysicyj.top
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: webhook-deployer
+                port:
+                  number: 8000
+  tls:
+    - hosts:
+        - webhook.zysicyj.top
+      secretName: zysicyj-tls

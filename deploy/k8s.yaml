@@ -1,4 +1,4 @@
-﻿apiVersion: v1
+apiVersion: v1
 kind: Namespace
 metadata:
   name: workbuddy
@@ -55,8 +55,8 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: workbuddy-tool
-          # 按自己的镜像仓库修改
-          image: your-registry.example.com/your-namespace/workbuddy-tool:latest
+          # CCR 自动构建推送 :latest tag，webhook-deployer 触发 rollout restart 时自动拉取最新镜像
+          image: ccr.ccs.tencentyun.com/zysicyj/workbuddy-tool:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
